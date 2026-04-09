@@ -25,7 +25,6 @@ function makeLdpcCode(
   const edgeCount = Math.max(1, Math.round(density * ncheck));
 
   for (let i = 0; i < ndata; i++) {
-    // Fisher-Yates shuffle to pick `edgeCount` random check nodes
     const indices = Array.from({ length: ncheck }, (_, j) => j);
     for (let j = indices.length - 1; j > 0; j--) {
       const k = Math.floor(Math.random() * (j + 1));
@@ -46,7 +45,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
   const nodeIndex = new Map<string, number>();
   allNodes.forEach((node, i) => nodeIndex.set(node, i));
 
-  // Build adjacency list
   const adj: number[][] = Array.from({ length: n }, () => []);
   for (const [a, b] of graph.edges) {
     const ai = nodeIndex.get(a)!;
@@ -55,7 +53,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
     adj[bi].push(ai);
   }
 
-  // Compute shortest-path distances via BFS (all pairs)
   const dist: number[][] = Array.from({ length: n }, () =>
     new Array(n).fill(Infinity)
   );
@@ -74,7 +71,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
     }
   }
 
-  // For disconnected pairs, use a large finite distance
   const maxFinite = Math.max(
     1,
     ...dist.flatMap((row) => row.filter((d) => d < Infinity))
@@ -83,8 +79,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
     for (let j = 0; j < n; j++)
       if (dist[i][j] === Infinity) dist[i][j] = maxFinite + 1;
 
-  // Kamada-Kawai: ideal distances d_ij and spring strengths k_ij
-  // L = desired edge length, scale factor
   const L = 80;
   const dij: number[][] = Array.from({ length: n }, (_, i) =>
     Array.from({ length: n }, (_, j) => dist[i][j] * L)
@@ -95,7 +89,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
     )
   );
 
-  // Initialize positions on a circle
   const x = new Float64Array(n);
   const y = new Float64Array(n);
   for (let i = 0; i < n; i++) {
@@ -104,12 +97,10 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
     y[i] = Math.sin(angle) * 100;
   }
 
-  // Iteratively move node with largest partial derivative (gradient)
   const maxIter = 200 * n;
   const epsilon = 1e-2;
 
   for (let iter = 0; iter < maxIter; iter++) {
-    // Find node m with largest |delta_m|
     let maxDelta = -1;
     let m = -1;
     for (let i = 0; i < n; i++) {
@@ -132,7 +123,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
 
     if (maxDelta < epsilon) break;
 
-    // Newton-Raphson to minimize energy for node m
     for (let inner = 0; inner < 50; inner++) {
       let dEdx = 0;
       let dEdy = 0;
@@ -157,7 +147,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
         d2Edxdy += k * ((d * dx * dy) / eucl3);
       }
 
-      // Solve 2x2 system: H * [deltaX, deltaY]^T = -[dEdx, dEdy]^T
       const det = d2Edx2 * d2Edy2 - d2Edxdy * d2Edxdy;
       if (Math.abs(det) < 1e-12) break;
 
@@ -171,7 +160,6 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
     }
   }
 
-  // Normalize to fit in viewBox
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (let i = 0; i < n; i++) {
     if (x[i] < minX) minX = x[i];
@@ -196,10 +184,12 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
   return positions;
 }
 
+// Check nodes: indigo/violet palette
 const CHECK_COLOR = "#670EFF";
-const CHECK_TOGGLED = "#FF5900";
-const DATA_COLOR = "gray";
-const DATA_TOGGLED = "black";
+const CHECK_TOGGLED = "#f97316";
+// Data nodes: muted / bright
+const DATA_COLOR = "#475569";
+const DATA_TOGGLED = "#e2e8f0";
 
 export default function LdpcGraph() {
   const [ncheck, setNcheck] = useState(20);
@@ -225,7 +215,6 @@ export default function LdpcGraph() {
     const g = makeLdpcCode(ncheck, ndata, density);
     const pos = computeLayout(g);
 
-    // Build adjacency for parity computation
     const adj = new Map<string, string[]>();
     for (const node of [...g.checkNodes, ...g.dataNodes]) adj.set(node, []);
     for (const [a, b] of g.edges) {
@@ -233,16 +222,13 @@ export default function LdpcGraph() {
       adj.get(b)!.push(a);
     }
 
-    // Each data node gets a random hidden state (0 or 1), displayed as black on screen
     const dataState = new Map<string, number>();
     for (const node of g.dataNodes) {
       dataState.set(node, Math.random() < prob0 ? 0 : 1);
     }
 
     const colors = new Map<string, string>();
-    // Data nodes all start as black (DATA_TOGGLED) on screen
     for (const node of g.dataNodes) colors.set(node, DATA_TOGGLED);
-    // Check nodes get color based on parity of neighboring data node hidden states
     for (const node of g.checkNodes) {
       const parity = (adj.get(node) || []).reduce(
         (sum, neighbor) => sum + (dataState.get(neighbor) || 0),
@@ -261,10 +247,8 @@ export default function LdpcGraph() {
       if (!node.startsWith("data_")) return;
       setNodeColors((prev) => {
         const next = new Map(prev);
-        // Toggle data node
         const currentData = next.get(node);
         next.set(node, currentData === DATA_TOGGLED ? DATA_COLOR : DATA_TOGGLED);
-        // Toggle connected check nodes
         for (const neighbor of adjacency.get(node) || []) {
           const currentCheck = next.get(neighbor);
           if (currentCheck === CHECK_COLOR) next.set(neighbor, CHECK_TOGGLED);
@@ -292,31 +276,32 @@ export default function LdpcGraph() {
   }, [graph]);
 
   return (
-    <div className="flex w-full flex-1 flex-col items-center gap-4 overflow-hidden">
-      <div className="flex flex-wrap items-end gap-4">
-        <label className="flex flex-col gap-1 text-sm font-medium">
-          Check nodes
+    <div className="flex w-full flex-1 flex-col items-center gap-3 overflow-hidden">
+      {/* Controls */}
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-5 py-3 shadow-lg backdrop-blur-sm">
+        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+          Check
           <input
             type="number"
             min={1}
             max={50}
             value={ncheck}
             onChange={(e) => setNcheck(Number(e.target.value))}
-            className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
+            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm font-medium">
-          Data nodes
+        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+          Data
           <input
             type="number"
             min={1}
             max={50}
             value={ndata}
             onChange={(e) => setNdata(Number(e.target.value))}
-            className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
+            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm font-medium">
+        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
           Density
           <input
             type="number"
@@ -325,10 +310,10 @@ export default function LdpcGraph() {
             step={0.05}
             value={density}
             onChange={(e) => setDensity(Number(e.target.value))}
-            className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
+            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm font-medium">
+        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
           P(0)
           <input
             type="number"
@@ -337,73 +322,120 @@ export default function LdpcGraph() {
             step={0.05}
             value={prob0}
             onChange={(e) => setProb0(Number(e.target.value))}
-            className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
+            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
           />
         </label>
         <button
           onClick={generate}
-          className="rounded bg-[#670EFF] px-4 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-[#5500dd]"
+          className="rounded-lg bg-indigo-600 px-5 py-1.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/20 transition-all hover:bg-indigo-500 hover:shadow-indigo-500/30 active:scale-95"
         >
           Generate
         </button>
       </div>
 
+      {/* Legend */}
       {graph && (
-        <>
-          <div className="flex gap-6 text-xs text-zinc-500">
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded-full bg-[#670EFF]" /> Check node
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded-full bg-gray-400" /> Data node
-            </span>
-            <span className="text-zinc-400">Click a data node to toggle parity</span>
-          </div>
-          <div ref={svgContainerRef} className="w-full" style={{ height: svgHeight > 0 ? svgHeight : undefined }}>
-            <svg viewBox="0 0 1200 900" preserveAspectRatio="xMidYMid meet" className="h-full w-full rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
-              {graph.edges.map(([a, b], i) => {
-                const pa = positions.get(a);
-                const pb = positions.get(b);
-                if (!pa || !pb) return null;
-                const aOrange = nodeColors.get(a) === CHECK_TOGGLED;
-                const bOrange = nodeColors.get(b) === CHECK_TOGGLED;
-                const highlighted = aOrange || bOrange;
-                return (
-                  <line
-                    key={i}
-                    x1={pa.x}
-                    y1={pa.y}
-                    x2={pb.x}
-                    y2={pb.y}
-                    stroke={highlighted ? CHECK_TOGGLED : "#d4d4d8"}
-                    strokeWidth={highlighted ? 3 : 1.5}
-                  />
-                );
-              })}
-              {[...graph.checkNodes, ...graph.dataNodes].map((node) => {
-                const pos = positions.get(node);
-                if (!pos) return null;
-                const isData = node.startsWith("data_");
-                const radius = isData ? 10 : 12;
-                return (
-                  <circle
-                    key={node}
-                    cx={pos.x}
-                    cy={pos.y}
-                    r={radius}
-                    fill={nodeColors.get(node) || (isData ? DATA_COLOR : CHECK_COLOR)}
-                    stroke="white"
-                    strokeWidth={2}
-                    className={isData ? "cursor-pointer" : ""}
-                    onClick={() => handleNodeClick(node)}
-                  >
-                    <title>{node}</title>
-                  </circle>
-                );
-              })}
-            </svg>
-          </div>
-        </>
+        <div className="flex items-center gap-5 text-xs text-zinc-500">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#670EFF] shadow-[0_0_6px_#670EFF]" />
+            <span className="text-zinc-400">Check</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#475569]" />
+            <span className="text-zinc-400">Data</span>
+          </span>
+          <span className="text-zinc-600">Click a data node to toggle parity</span>
+        </div>
+      )}
+
+      {/* Graph */}
+      {graph && (
+        <div ref={svgContainerRef} className="w-full" style={{ height: svgHeight > 0 ? svgHeight : undefined }}>
+          <svg
+            viewBox="0 0 1200 900"
+            preserveAspectRatio="xMidYMid meet"
+            className="h-full w-full rounded-xl border border-white/[0.04] bg-[#0e0e18]"
+          >
+            <defs>
+              <filter id="glow-check" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <filter id="glow-orange" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="5" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <filter id="glow-data" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+
+            {/* Edges */}
+            {graph.edges.map(([a, b], i) => {
+              const pa = positions.get(a);
+              const pb = positions.get(b);
+              if (!pa || !pb) return null;
+              const aOrange = nodeColors.get(a) === CHECK_TOGGLED;
+              const bOrange = nodeColors.get(b) === CHECK_TOGGLED;
+              const highlighted = aOrange || bOrange;
+              return (
+                <line
+                  key={i}
+                  x1={pa.x}
+                  y1={pa.y}
+                  x2={pb.x}
+                  y2={pb.y}
+                  stroke={highlighted ? "#f97316" : "#ffffff"}
+                  strokeWidth={highlighted ? 2.5 : 1}
+                  opacity={highlighted ? 0.8 : 0.5}
+                />
+              );
+            })}
+
+            {/* Nodes */}
+            {[...graph.checkNodes, ...graph.dataNodes].map((node) => {
+              const pos = positions.get(node);
+              if (!pos) return null;
+              const isData = node.startsWith("data_");
+              const color = nodeColors.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
+              const isOrange = color === CHECK_TOGGLED;
+              const radius = isData ? 9 : 11;
+
+              let filter: string | undefined;
+              if (isOrange) filter = "url(#glow-orange)";
+              else if (!isData) filter = "url(#glow-check)";
+              else if (color === DATA_TOGGLED) filter = "url(#glow-data)";
+
+              return (
+                <circle
+                  key={node}
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={radius}
+                  fill={color}
+                  stroke={isData ? "transparent" : "rgba(255,255,255,0.1)"}
+                  strokeWidth={1.5}
+                  filter={filter}
+                  className={isData ? "cursor-pointer" : ""}
+                  style={{ transition: "fill 0.2s ease, filter 0.2s ease" }}
+                  onClick={() => handleNodeClick(node)}
+                >
+                  <title>{node}</title>
+                </circle>
+              );
+            })}
+          </svg>
+        </div>
       )}
     </div>
   );
