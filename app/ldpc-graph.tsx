@@ -3,8 +3,8 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 
 interface Graph {
-  dataNodes: string[];
   checkNodes: string[];
+  dataNodes: string[];
   edges: [string, string][];
 }
 
@@ -14,34 +14,34 @@ interface NodePos {
 }
 
 function makeLdpcCode(
-  ndata: number,
   ncheck: number,
+  ndata: number,
   density: number
 ): Graph {
-  const dataNodes = Array.from({ length: ndata }, (_, i) => `data_${i}`);
   const checkNodes = Array.from({ length: ncheck }, (_, i) => `check_${i}`);
+  const dataNodes = Array.from({ length: ndata }, (_, i) => `data_${i}`);
   const edges: [string, string][] = [];
 
-  const edgeCount = Math.max(1, Math.round(density * ndata));
+  const edgeCount = Math.max(1, Math.round(density * ncheck));
 
-  for (let i = 0; i < ncheck; i++) {
-    // Fisher-Yates shuffle to pick `edgeCount` random data nodes
-    const indices = Array.from({ length: ndata }, (_, j) => j);
+  for (let i = 0; i < ndata; i++) {
+    // Fisher-Yates shuffle to pick `edgeCount` random check nodes
+    const indices = Array.from({ length: ncheck }, (_, j) => j);
     for (let j = indices.length - 1; j > 0; j--) {
       const k = Math.floor(Math.random() * (j + 1));
       [indices[j], indices[k]] = [indices[k], indices[j]];
     }
     const selected = indices.slice(0, edgeCount);
     for (const idx of selected) {
-      edges.push([`check_${i}`, `data_${idx}`]);
+      edges.push([`data_${i}`, `check_${idx}`]);
     }
   }
 
-  return { dataNodes, checkNodes, edges };
+  return { checkNodes, dataNodes, edges };
 }
 
 function computeLayout(graph: Graph): Map<string, NodePos> {
-  const allNodes = [...graph.dataNodes, ...graph.checkNodes];
+  const allNodes = [...graph.checkNodes, ...graph.dataNodes];
   const n = allNodes.length;
   const nodeIndex = new Map<string, number>();
   allNodes.forEach((node, i) => nodeIndex.set(node, i));
@@ -196,15 +196,15 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
   return positions;
 }
 
-const DATA_COLOR = "#670EFF";
-const DATA_TOGGLED = "#FF5900";
-const CHECK_COLOR = "gray";
-const CHECK_TOGGLED = "black";
+const CHECK_COLOR = "#670EFF";
+const CHECK_TOGGLED = "#FF5900";
+const DATA_COLOR = "gray";
+const DATA_TOGGLED = "black";
 
 export default function LdpcGraph() {
-  const [ndata, setNdata] = useState(10);
-  const [ncheck, setNcheck] = useState(5);
-  const [density, setDensity] = useState(0.3);
+  const [ncheck, setNcheck] = useState(20);
+  const [ndata, setNdata] = useState(20);
+  const [density, setDensity] = useState(0.15);
   const [graph, setGraph] = useState<Graph | null>(null);
   const [positions, setPositions] = useState<Map<string, NodePos>>(new Map());
   const [nodeColors, setNodeColors] = useState<Map<string, string>>(new Map());
@@ -212,7 +212,7 @@ export default function LdpcGraph() {
   const adjacency = useMemo(() => {
     if (!graph) return new Map<string, string[]>();
     const adj = new Map<string, string[]>();
-    for (const node of [...graph.dataNodes, ...graph.checkNodes]) adj.set(node, []);
+    for (const node of [...graph.checkNodes, ...graph.dataNodes]) adj.set(node, []);
     for (const [a, b] of graph.edges) {
       adj.get(a)!.push(b);
       adj.get(b)!.push(a);
@@ -221,29 +221,29 @@ export default function LdpcGraph() {
   }, [graph]);
 
   const generate = useCallback(() => {
-    const g = makeLdpcCode(ndata, ncheck, density);
+    const g = makeLdpcCode(ncheck, ndata, density);
     const pos = computeLayout(g);
     const colors = new Map<string, string>();
-    for (const node of g.dataNodes) colors.set(node, DATA_COLOR);
     for (const node of g.checkNodes) colors.set(node, CHECK_COLOR);
+    for (const node of g.dataNodes) colors.set(node, DATA_COLOR);
     setGraph(g);
     setPositions(pos);
     setNodeColors(colors);
-  }, [ndata, ncheck, density]);
+  }, [ncheck, ndata, density]);
 
   const handleNodeClick = useCallback(
     (node: string) => {
-      if (!node.startsWith("check_")) return;
+      if (!node.startsWith("data_")) return;
       setNodeColors((prev) => {
         const next = new Map(prev);
-        // Toggle check node
-        const currentCheck = next.get(node);
-        next.set(node, currentCheck === CHECK_TOGGLED ? CHECK_COLOR : CHECK_TOGGLED);
-        // Toggle connected data nodes
+        // Toggle data node
+        const currentData = next.get(node);
+        next.set(node, currentData === DATA_TOGGLED ? DATA_COLOR : DATA_TOGGLED);
+        // Toggle connected check nodes
         for (const neighbor of adjacency.get(node) || []) {
-          const currentData = next.get(neighbor);
-          if (currentData === DATA_COLOR) next.set(neighbor, DATA_TOGGLED);
-          else if (currentData === DATA_TOGGLED) next.set(neighbor, DATA_COLOR);
+          const currentCheck = next.get(neighbor);
+          if (currentCheck === CHECK_COLOR) next.set(neighbor, CHECK_TOGGLED);
+          else if (currentCheck === CHECK_TOGGLED) next.set(neighbor, CHECK_COLOR);
         }
         return next;
       });
@@ -270,17 +270,6 @@ export default function LdpcGraph() {
     <div className="flex w-full flex-1 flex-col items-center gap-4 overflow-hidden">
       <div className="flex flex-wrap items-end gap-4">
         <label className="flex flex-col gap-1 text-sm font-medium">
-          Data nodes
-          <input
-            type="number"
-            min={1}
-            max={50}
-            value={ndata}
-            onChange={(e) => setNdata(Number(e.target.value))}
-            className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm font-medium">
           Check nodes
           <input
             type="number"
@@ -288,6 +277,17 @@ export default function LdpcGraph() {
             max={50}
             value={ncheck}
             onChange={(e) => setNcheck(Number(e.target.value))}
+            className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm font-medium">
+          Data nodes
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={ndata}
+            onChange={(e) => setNdata(Number(e.target.value))}
             className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
           />
         </label>
@@ -315,12 +315,12 @@ export default function LdpcGraph() {
         <>
           <div className="flex gap-6 text-xs text-zinc-500">
             <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded-full bg-[#670EFF]" /> Data node
+              <span className="inline-block h-3 w-3 rounded-full bg-[#670EFF]" /> Check node
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded-full bg-gray-400" /> Check node
+              <span className="inline-block h-3 w-3 rounded-full bg-gray-400" /> Data node
             </span>
-            <span className="text-zinc-400">Click a check node to toggle parity</span>
+            <span className="text-zinc-400">Click a data node to toggle parity</span>
           </div>
           <div ref={svgContainerRef} className="w-full" style={{ height: svgHeight > 0 ? svgHeight : undefined }}>
             <svg viewBox="0 0 1200 900" preserveAspectRatio="xMidYMid meet" className="h-full w-full rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
@@ -328,6 +328,9 @@ export default function LdpcGraph() {
                 const pa = positions.get(a);
                 const pb = positions.get(b);
                 if (!pa || !pb) return null;
+                const aOrange = nodeColors.get(a) === CHECK_TOGGLED;
+                const bOrange = nodeColors.get(b) === CHECK_TOGGLED;
+                const highlighted = aOrange || bOrange;
                 return (
                   <line
                     key={i}
@@ -335,26 +338,26 @@ export default function LdpcGraph() {
                     y1={pa.y}
                     x2={pb.x}
                     y2={pb.y}
-                    stroke="#d4d4d8"
-                    strokeWidth={1.5}
+                    stroke={highlighted ? CHECK_TOGGLED : "#d4d4d8"}
+                    strokeWidth={highlighted ? 3 : 1.5}
                   />
                 );
               })}
-              {[...graph.dataNodes, ...graph.checkNodes].map((node) => {
+              {[...graph.checkNodes, ...graph.dataNodes].map((node) => {
                 const pos = positions.get(node);
                 if (!pos) return null;
-                const isCheck = node.startsWith("check_");
-                const radius = isCheck ? 10 : 12;
+                const isData = node.startsWith("data_");
+                const radius = isData ? 10 : 12;
                 return (
                   <circle
                     key={node}
                     cx={pos.x}
                     cy={pos.y}
                     r={radius}
-                    fill={nodeColors.get(node) || (isCheck ? CHECK_COLOR : DATA_COLOR)}
+                    fill={nodeColors.get(node) || (isData ? DATA_COLOR : CHECK_COLOR)}
                     stroke="white"
                     strokeWidth={2}
-                    className={isCheck ? "cursor-pointer" : ""}
+                    className={isData ? "cursor-pointer" : ""}
                     onClick={() => handleNodeClick(node)}
                   >
                     <title>{node}</title>
