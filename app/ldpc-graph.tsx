@@ -289,6 +289,18 @@ const CHECK_TOGGLED = "#f97316";
 const DATA_COLOR = "#475569";
 const DATA_TOGGLED = "#e2e8f0";
 
+function getGraphDifficulty(entry: { ncheck: number; ndata: number }): { label: string; color: string } {
+  if (entry.ncheck <= 10 && entry.ndata <= 10) return { label: "Easy", color: "text-emerald-600" };
+  if (entry.ncheck <= 20 && entry.ndata <= 20) return { label: "Medium", color: "text-amber-500" };
+  return { label: "Hard", color: "text-red-600" };
+}
+
+function getFlipDifficulty(prob0: number): { label: string; color: string } {
+  if (prob0 >= 0.97) return { label: "Easy", color: "text-emerald-600" };
+  if (prob0 >= 0.95) return { label: "Medium", color: "text-amber-500" };
+  return { label: "Hard", color: "text-red-600" };
+}
+
 function makeShareUrl(entry: HistoryEntry): string {
   const obj: Record<string, string> = {
     c: String(entry.ncheck),
@@ -318,6 +330,7 @@ export default function LdpcGraph() {
   const [dataSeed, setDataSeed] = useState(0);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [sharePopover, setSharePopover] = useState<number | null>(null);
   const [frozen, setFrozen] = useState(false);
   // Challenge info from a shared link
   const [challenge, setChallenge] = useState<{ score: number; flips: string } | null>(null);
@@ -377,13 +390,17 @@ export default function LdpcGraph() {
     }
   }, [loadInstance]);
 
-  const generateGraph = useCallback(() => {
+  const generateGraph = useCallback((c: number, d: number, k: number, p: number) => {
     const gs = newSeed();
     const ds = newSeed();
-    const g = makeLdpcCode(ncheck, ndata, density, gs);
+    const g = makeLdpcCode(c, d, k, gs);
     const pos = computeLayout(g);
     const adj = buildAdj(g);
-    const colors = computeColors(g, adj, prob0, ds);
+    const colors = computeColors(g, adj, p, ds);
+    setNcheck(c);
+    setNdata(d);
+    setDensity(k);
+    setProb0(p);
     setGraphSeed(gs);
     setDataSeed(ds);
     setGraph(g);
@@ -393,7 +410,7 @@ export default function LdpcGraph() {
     setFrozen(false);
     setChallenge(null);
     setShowingChallenger(false);
-  }, [ncheck, ndata, density, prob0]);
+  }, []);
 
   const score = useMemo(() => {
     if (!graph) return 0;
@@ -404,18 +421,19 @@ export default function LdpcGraph() {
     return count;
   }, [graph, nodeColors]);
 
-  const handleRandomize = useCallback(() => {
+  const handleRandomize = useCallback((p: number) => {
     if (!graph) return;
     const ds = newSeed();
     const adj = buildAdj(graph);
-    const colors = computeColors(graph, adj, prob0, ds);
+    const colors = computeColors(graph, adj, p, ds);
+    setProb0(p);
     setDataSeed(ds);
     setNodeColors(colors);
     setInitialColors(colors);
     setFrozen(false);
     setChallenge(null);
     setShowingChallenger(false);
-  }, [graph, prob0]);
+  }, [graph]);
 
   const handleSubmit = useCallback(() => {
     if (!graph || frozen) return;
@@ -471,6 +489,19 @@ export default function LdpcGraph() {
     []
   );
 
+  // Close share popover on outside click
+  const sharePopoverRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (sharePopover === null) return;
+    function handleClick(e: MouseEvent) {
+      if (sharePopoverRef.current && !sharePopoverRef.current.contains(e.target as Node)) {
+        setSharePopover(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [sharePopover]);
+
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const [svgHeight, setSvgHeight] = useState(0);
 
@@ -505,71 +536,53 @@ export default function LdpcGraph() {
       )}
 
       {/* Controls */}
-      <div className="flex flex-wrap items-end gap-6">
-        {/* Graph structure controls */}
-        <div className="flex items-end gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-3 shadow-sm">
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
-            Check
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={ncheck}
-              onChange={(e) => setNcheck(Number(e.target.value))}
-              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
-            Data
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={ndata}
-              onChange={(e) => setNdata(Number(e.target.value))}
-              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
-            Density
-            <input
-              type="number"
-              min={0.05}
-              max={1}
-              step={0.05}
-              value={density}
-              onChange={(e) => setDensity(Number(e.target.value))}
-              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-            />
-          </label>
+      <div className="flex flex-wrap items-center gap-4">
+        {/* Difficulty buttons */}
+        <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
+          <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">New Game</span>
           <button
-            onClick={generateGraph}
-            className="rounded-lg bg-indigo-600 px-5 py-1.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/20 transition-all hover:bg-indigo-500 hover:shadow-indigo-500/30 active:scale-95"
+            onClick={() => generateGraph(10, 10, 0.3, 0.9)}
+            className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-500 active:scale-95"
           >
-            New Graph
+            Easy
+          </button>
+          <button
+            onClick={() => generateGraph(20, 20, 0.15, 0.9)}
+            className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-amber-400 active:scale-95"
+          >
+            Medium
+          </button>
+          <button
+            onClick={() => generateGraph(40, 40, 0.08, 0.94)}
+            className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-red-500 active:scale-95"
+          >
+            Hard
           </button>
         </div>
 
-        {/* Data state controls */}
-        <div className="flex items-end gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-3 shadow-sm">
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
-            P(0)
-            <input
-              type="number"
-              min={0}
-              max={1}
-              step={0.05}
-              value={prob0}
-              onChange={(e) => setProb0(Number(e.target.value))}
-              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-            />
-          </label>
+        {/* Randomize */}
+        <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
+          <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">Randomize</span>
           <button
-            onClick={handleRandomize}
+            onClick={() => handleRandomize(0.97)}
             disabled={!graph}
-            className="rounded-lg bg-orange-600 px-5 py-1.5 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-500 hover:shadow-orange-500/30 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+            className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
           >
-            Randomize
+            Easy
+          </button>
+          <button
+            onClick={() => handleRandomize(0.95)}
+            disabled={!graph}
+            className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-amber-400 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+          >
+            Medium
+          </button>
+          <button
+            onClick={() => handleRandomize(0.9)}
+            disabled={!graph}
+            className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-red-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+          >
+            Hard
           </button>
         </div>
 
@@ -623,7 +636,7 @@ export default function LdpcGraph() {
           <svg
             viewBox="0 0 1000 1000"
             preserveAspectRatio="xMidYMid meet"
-            className={`h-full w-full rounded-xl border bg-white ${frozen ? "border-emerald-500/40" : "border-zinc-200"}`}
+            className="h-full w-full bg-white"
           >
             <defs>
               <filter id="glow-check" x="-50%" y="-50%" width="200%" height="200%">
@@ -664,7 +677,7 @@ export default function LdpcGraph() {
                   y1={pa.y}
                   x2={pb.x}
                   y2={pb.y}
-                  stroke={highlighted ? "#f97316" : "#d4d4d8"}
+                  stroke={highlighted ? "#f97316" : "#374151"}
                   strokeWidth={highlighted ? 2.5 : 1}
                   opacity={highlighted ? 0.8 : 0.5}
                 />
@@ -678,7 +691,7 @@ export default function LdpcGraph() {
               const isData = node.startsWith("data_");
               const color = nodeColors.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
               const isOrange = color === CHECK_TOGGLED;
-              const radius = isData ? 9 : 11;
+              const radius = isData ? 14 : 11;
 
               let filter: string | undefined;
               if (isOrange) filter = "url(#glow-orange)";
@@ -725,7 +738,8 @@ export default function LdpcGraph() {
                   <thead>
                     <tr className="text-left text-zinc-500">
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">#</th>
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Hardness</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Graph</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Flips</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Score</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Share</th>
                     </tr>
@@ -738,8 +752,13 @@ export default function LdpcGraph() {
                       >
                         <td className="px-2 py-1.5 tabular-nums text-zinc-500">{i + 1}</td>
                         <td className="px-2 py-1.5">
-                          <span className="text-zinc-500">
-                            {entry.ncheck}c {entry.ndata}d {entry.density}k {(1 - entry.prob0).toFixed(2)}p
+                          <span className={`font-semibold ${getGraphDifficulty(entry).color}`}>
+                            {getGraphDifficulty(entry).label}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <span className={`font-semibold ${getFlipDifficulty(entry.prob0).color}`}>
+                            {getFlipDifficulty(entry.prob0).label}
                           </span>
                         </td>
                         <td className="px-2 py-1.5 text-right">
@@ -757,26 +776,17 @@ export default function LdpcGraph() {
                         </td>
                         <td className="px-2 py-1.5 text-right">
                           <button
-                            onClick={() => copyShareLink(entry, i)}
+                            onClick={() => setSharePopover(sharePopover === i ? null : i)}
                             className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all active:scale-95 ${
-                              copiedIdx === i
-                                ? "bg-emerald-500/15 text-emerald-400"
-                                : entry.flips
-                                  ? "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
-                                  : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
+                              entry.flips
+                                ? "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                                : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
                             }`}
                           >
-                            {copiedIdx === i ? (
-                              "Copied!"
-                            ) : (
-                              <>
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
-                                  <path d="M12.232 4.232a2.5 2.5 0 0 1 3.536 3.536l-1.225 1.224a.75.75 0 0 0 1.061 1.06l1.224-1.224a4 4 0 0 0-5.656-5.656l-3 3a4 4 0 0 0 .225 5.865.75.75 0 0 0 .977-1.138 2.5 2.5 0 0 1-.142-3.667l3-3Z" />
-                                  <path d="M11.603 7.963a.75.75 0 0 0-.977 1.138 2.5 2.5 0 0 1 .142 3.667l-3 3a2.5 2.5 0 0 1-3.536-3.536l1.225-1.224a.75.75 0 0 0-1.061-1.06l-1.224 1.224a4 4 0 1 0 5.656 5.656l3-3a4 4 0 0 0-.225-5.865Z" />
-                                </svg>
-                                {entry.flips ? "Challenge" : "Share"}
-                              </>
-                            )}
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                              <path d="M13 4.5a2.5 2.5 0 1 1 .702 1.737L6.97 9.604a2.5 2.5 0 0 1 0 .792l6.733 3.367a2.5 2.5 0 1 1-.671 1.341l-6.733-3.367a2.5 2.5 0 1 1 0-3.474l6.733-3.367A2.5 2.5 0 0 1 13 4.5Z" />
+                            </svg>
+                            {entry.flips ? "Challenge" : "Share"}
                           </button>
                         </td>
                       </tr>
@@ -788,6 +798,89 @@ export default function LdpcGraph() {
           </div>
         </div>
       )}
+      {/* Share modal */}
+      {sharePopover !== null && history[sharePopover] && (() => {
+        const entry = history[sharePopover];
+        const idx = sharePopover;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/30" onClick={() => setSharePopover(null)} />
+            <div ref={sharePopoverRef} className="relative w-80 rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl">
+              <button
+                onClick={() => setSharePopover(null)}
+                className="absolute right-3 top-3 rounded-lg p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+                  <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                </svg>
+              </button>
+              <h3 className="mb-1 text-lg font-bold text-zinc-800">
+                {entry.flips ? "Challenge a friend" : "Share this puzzle"}
+              </h3>
+              <p className="mb-4 text-sm text-zinc-500">
+                {entry.flips
+                  ? `You scored ${entry.score} — dare someone to beat it!`
+                  : "Send this puzzle to a friend"}
+              </p>
+              <div className="flex flex-col gap-1">
+                <button
+                  onClick={() => { copyShareLink(entry, idx); }}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5 text-zinc-400">
+                    <path d="M12.232 4.232a2.5 2.5 0 0 1 3.536 3.536l-1.225 1.224a.75.75 0 0 0 1.061 1.06l1.224-1.224a4 4 0 0 0-5.656-5.656l-3 3a4 4 0 0 0 .225 5.865.75.75 0 0 0 .977-1.138 2.5 2.5 0 0 1-.142-3.667l3-3Z" />
+                    <path d="M11.603 7.963a.75.75 0 0 0-.977 1.138 2.5 2.5 0 0 1 .142 3.667l-3 3a2.5 2.5 0 0 1-3.536-3.536l1.225-1.224a.75.75 0 0 0-1.061-1.06l-1.224 1.224a4 4 0 1 0 5.656 5.656l3-3a4 4 0 0 0-.225-5.865Z" />
+                  </svg>
+                  {copiedIdx === idx ? <span className="font-medium text-emerald-600">Copied!</span> : "Copy link"}
+                </button>
+                <a
+                  href={`https://twitter.com/intent/tweet?text=${encodeURIComponent("I scored " + entry.score + " on this LDPC puzzle! Can you beat me?")}&url=${encodeURIComponent(makeShareUrl(entry))}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 text-zinc-800" fill="currentColor">
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                  </svg>
+                  X / Twitter
+                </a>
+                <a
+                  href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(makeShareUrl(entry))}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 text-[#1877F2]" fill="currentColor">
+                    <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
+                  </svg>
+                  Facebook
+                </a>
+                <a
+                  href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(makeShareUrl(entry))}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 text-[#0A66C2]" fill="currentColor">
+                    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
+                  </svg>
+                  LinkedIn
+                </a>
+                <a
+                  href={`mailto:?subject=${encodeURIComponent("LDPC Puzzle Challenge!")}&body=${encodeURIComponent("I scored " + entry.score + " on this LDPC puzzle! Can you beat me?\n\n" + makeShareUrl(entry))}`}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5 text-zinc-400">
+                    <path d="M3 4a2 2 0 0 0-2 2v1.161l8.441 4.221a1.25 1.25 0 0 0 1.118 0L19 7.162V6a2 2 0 0 0-2-2H3Z" />
+                    <path d="m19 8.839-7.77 3.885a2.75 2.75 0 0 1-2.46 0L1 8.839V14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.839Z" />
+                  </svg>
+                  Email
+                </a>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
