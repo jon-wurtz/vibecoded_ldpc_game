@@ -406,10 +406,6 @@ export default function LdpcGraph() {
 
   const handleRandomize = useCallback(() => {
     if (!graph) return;
-    setHistory((prev) => [
-      ...prev,
-      { ncheck, ndata, density, prob0, score, graphSeed, dataSeed },
-    ]);
     const ds = newSeed();
     const adj = buildAdj(graph);
     const colors = computeColors(graph, adj, prob0, ds);
@@ -419,7 +415,7 @@ export default function LdpcGraph() {
     setFrozen(false);
     setChallenge(null);
     setShowingChallenger(false);
-  }, [graph, ncheck, ndata, density, prob0, score, graphSeed, dataSeed]);
+  }, [graph, prob0]);
 
   const handleSubmit = useCallback(() => {
     if (!graph || frozen) return;
@@ -495,13 +491,13 @@ export default function LdpcGraph() {
       {/* Challenge banner */}
       {challenge && (
         <div className="flex items-center gap-4 rounded-xl border border-orange-500/20 bg-orange-500/[0.06] px-5 py-2 text-sm">
-          <span className="font-semibold text-orange-400">
+          <span className="font-semibold text-orange-600">
             Challenge: someone scored {challenge.score}
           </span>
-          <span className="text-zinc-400">Can you beat it?</span>
+          <span className="text-zinc-500">Can you beat it?</span>
           <button
             onClick={toggleChallengerView}
-            className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-300 transition-colors hover:bg-white/[0.08]"
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
           >
             {showingChallenger ? "Hide solution" : "Show solution"}
           </button>
@@ -511,8 +507,8 @@ export default function LdpcGraph() {
       {/* Controls */}
       <div className="flex flex-wrap items-end gap-6">
         {/* Graph structure controls */}
-        <div className="flex items-end gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-5 py-3 shadow-lg backdrop-blur-sm">
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+        <div className="flex items-end gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-3 shadow-sm">
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
             Check
             <input
               type="number"
@@ -520,10 +516,10 @@ export default function LdpcGraph() {
               max={50}
               value={ncheck}
               onChange={(e) => setNcheck(Number(e.target.value))}
-              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
             Data
             <input
               type="number"
@@ -531,10 +527,10 @@ export default function LdpcGraph() {
               max={50}
               value={ndata}
               onChange={(e) => setNdata(Number(e.target.value))}
-              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
             Density
             <input
               type="number"
@@ -543,7 +539,7 @@ export default function LdpcGraph() {
               step={0.05}
               value={density}
               onChange={(e) => setDensity(Number(e.target.value))}
-              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
             />
           </label>
           <button
@@ -555,8 +551,8 @@ export default function LdpcGraph() {
         </div>
 
         {/* Data state controls */}
-        <div className="flex items-end gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-5 py-3 shadow-lg backdrop-blur-sm">
-          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+        <div className="flex items-end gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-5 py-3 shadow-sm">
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-500 uppercase">
             P(0)
             <input
               type="number"
@@ -565,7 +561,7 @@ export default function LdpcGraph() {
               step={0.05}
               value={prob0}
               onChange={(e) => setProb0(Number(e.target.value))}
-              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+              className="w-20 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-center text-sm text-zinc-800 outline-none transition-colors focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
             />
           </label>
           <button
@@ -611,9 +607,9 @@ export default function LdpcGraph() {
                 ? "Viewing challenger's solution"
                 : "Click a data node to toggle parity"}
           </span>
-          <span className="ml-auto flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-1">
+          <span className="ml-auto flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1">
             <span className="text-zinc-500 uppercase tracking-wide">Score</span>
-            <span className={`text-lg font-bold tabular-nums ${score === 0 ? "text-emerald-400" : "text-orange-400"}`}>
+            <span className={`text-lg font-bold tabular-nums ${score === 0 ? "text-emerald-600" : "text-orange-500"}`}>
               {score}
             </span>
             <span className="text-zinc-600">/ {graph.checkNodes.length}</span>
@@ -627,7 +623,7 @@ export default function LdpcGraph() {
           <svg
             viewBox="0 0 1000 1000"
             preserveAspectRatio="xMidYMid meet"
-            className={`h-full w-full rounded-xl border bg-[#0e0e18] ${frozen ? "border-emerald-500/20" : "border-white/[0.04]"}`}
+            className={`h-full w-full rounded-xl border bg-white ${frozen ? "border-emerald-500/40" : "border-zinc-200"}`}
           >
             <defs>
               <filter id="glow-check" x="-50%" y="-50%" width="200%" height="200%">
@@ -668,7 +664,7 @@ export default function LdpcGraph() {
                   y1={pa.y}
                   x2={pb.x}
                   y2={pb.y}
-                  stroke={highlighted ? "#f97316" : "#ffffff"}
+                  stroke={highlighted ? "#f97316" : "#d4d4d8"}
                   strokeWidth={highlighted ? 2.5 : 1}
                   opacity={highlighted ? 0.8 : 0.5}
                 />
@@ -698,7 +694,7 @@ export default function LdpcGraph() {
                   cy={pos.y}
                   r={radius}
                   fill={color}
-                  stroke={isData ? "transparent" : "rgba(255,255,255,0.1)"}
+                  stroke={isData ? "transparent" : "rgba(0,0,0,0.08)"}
                   strokeWidth={1.5}
                   filter={filter}
                   className={clickable ? "cursor-pointer" : ""}
@@ -715,9 +711,9 @@ export default function LdpcGraph() {
           </svg>
 
           {/* History */}
-          <div className="flex w-72 shrink-0 flex-col rounded-xl border border-white/[0.06] bg-white/[0.03] backdrop-blur-sm">
-            <div className="border-b border-white/[0.06] px-4 py-2.5">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">History</h2>
+          <div className="flex w-72 shrink-0 flex-col rounded-xl border border-zinc-200 bg-zinc-50">
+            <div className="border-b border-zinc-200 px-4 py-2.5">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">History</h2>
             </div>
             <div className="flex-1 overflow-y-auto">
               {history.length === 0 ? (
@@ -728,21 +724,21 @@ export default function LdpcGraph() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="text-left text-zinc-500">
-                      <th className="sticky top-0 bg-[#0e0e18] px-2 py-2 font-medium">#</th>
-                      <th className="sticky top-0 bg-[#0e0e18] px-2 py-2 font-medium">Hardness</th>
-                      <th className="sticky top-0 bg-[#0e0e18] px-2 py-2 text-right font-medium">Score</th>
-                      <th className="sticky top-0 bg-[#0e0e18] px-2 py-2 text-right font-medium">Share</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">#</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Hardness</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Score</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Share</th>
                     </tr>
                   </thead>
                   <tbody>
                     {history.map((entry, i) => (
                       <tr
                         key={i}
-                        className="border-t border-white/[0.03] transition-colors hover:bg-white/[0.02]"
+                        className="border-t border-zinc-100 transition-colors hover:bg-zinc-100"
                       >
                         <td className="px-2 py-1.5 tabular-nums text-zinc-500">{i + 1}</td>
                         <td className="px-2 py-1.5">
-                          <span className="text-zinc-400">
+                          <span className="text-zinc-500">
                             {entry.ncheck}c {entry.ndata}d {entry.density}k {(1 - entry.prob0).toFixed(2)}p
                           </span>
                         </td>
@@ -750,10 +746,10 @@ export default function LdpcGraph() {
                           <span
                             className={`font-bold tabular-nums ${
                               entry.score === 0
-                                ? "text-emerald-400"
+                                ? "text-emerald-600"
                                 : entry.score <= 2
-                                  ? "text-yellow-400"
-                                  : "text-orange-400"
+                                  ? "text-yellow-600"
+                                  : "text-orange-500"
                             }`}
                           >
                             {entry.score}
@@ -767,7 +763,7 @@ export default function LdpcGraph() {
                                 ? "bg-emerald-500/15 text-emerald-400"
                                 : entry.flips
                                   ? "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
-                                  : "bg-white/[0.04] text-zinc-400 hover:bg-white/[0.08] hover:text-zinc-200"
+                                  : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
                             }`}
                           >
                             {copiedIdx === i ? (

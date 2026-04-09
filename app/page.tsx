@@ -7,7 +7,7 @@ export default function Home() {
         <h1 className="bg-gradient-to-r from-[#a78bfa] via-[#818cf8] to-[#6366f1] bg-clip-text text-3xl font-bold tracking-tight text-transparent">
           Find the Errors in the Code!
         </h1>
-        <p className="mt-1 text-sm text-zinc-400">
+        <p className="mt-1 text-sm text-zinc-500">
           Click on the white nodes to change the check nodes, which compute the parity of the connected data nodes. Minimize the number of orange nodes to win!
         </p>
       </div>
