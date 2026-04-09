@@ -170,8 +170,8 @@ function computeLayout(graph: Graph): Map<string, NodePos> {
   const rangeX = maxX - minX || 1;
   const rangeY = maxY - minY || 1;
   const padding = 60;
-  const width = 1200;
-  const height = 900;
+  const width = 1000;
+  const height = 1000;
 
   const positions = new Map<string, NodePos>();
   for (let i = 0; i < n; i++) {
@@ -211,9 +211,33 @@ export default function LdpcGraph() {
     return adj;
   }, [graph]);
 
-  const generate = useCallback(() => {
+  const randomizeState = useCallback(
+    (g: Graph, adj: Map<string, string[]>) => {
+      const dataState = new Map<string, number>();
+      for (const node of g.dataNodes) {
+        dataState.set(node, Math.random() < prob0 ? 0 : 1);
+      }
+
+      const colors = new Map<string, string>();
+      for (const node of g.dataNodes) colors.set(node, DATA_TOGGLED);
+      for (const node of g.checkNodes) {
+        const parity =
+          (adj.get(node) || []).reduce(
+            (sum, neighbor) => sum + (dataState.get(neighbor) || 0),
+            0
+          ) % 2;
+        colors.set(node, parity === 0 ? CHECK_COLOR : CHECK_TOGGLED);
+      }
+      setNodeColors(colors);
+    },
+    [prob0]
+  );
+
+  const generateGraph = useCallback(() => {
     const g = makeLdpcCode(ncheck, ndata, density);
     const pos = computeLayout(g);
+    setGraph(g);
+    setPositions(pos);
 
     const adj = new Map<string, string[]>();
     for (const node of [...g.checkNodes, ...g.dataNodes]) adj.set(node, []);
@@ -221,26 +245,13 @@ export default function LdpcGraph() {
       adj.get(a)!.push(b);
       adj.get(b)!.push(a);
     }
+    randomizeState(g, adj);
+  }, [ncheck, ndata, density, randomizeState]);
 
-    const dataState = new Map<string, number>();
-    for (const node of g.dataNodes) {
-      dataState.set(node, Math.random() < prob0 ? 0 : 1);
-    }
-
-    const colors = new Map<string, string>();
-    for (const node of g.dataNodes) colors.set(node, DATA_TOGGLED);
-    for (const node of g.checkNodes) {
-      const parity = (adj.get(node) || []).reduce(
-        (sum, neighbor) => sum + (dataState.get(neighbor) || 0),
-        0
-      ) % 2;
-      colors.set(node, parity === 0 ? CHECK_COLOR : CHECK_TOGGLED);
-    }
-
-    setGraph(g);
-    setPositions(pos);
-    setNodeColors(colors);
-  }, [ncheck, ndata, density, prob0]);
+  const handleRandomize = useCallback(() => {
+    if (!graph) return;
+    randomizeState(graph, adjacency);
+  }, [graph, adjacency, randomizeState]);
 
   const handleNodeClick = useCallback(
     (node: string) => {
@@ -278,59 +289,73 @@ export default function LdpcGraph() {
   return (
     <div className="flex w-full flex-1 flex-col items-center gap-3 overflow-hidden">
       {/* Controls */}
-      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-5 py-3 shadow-lg backdrop-blur-sm">
-        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
-          Check
-          <input
-            type="number"
-            min={1}
-            max={50}
-            value={ncheck}
-            onChange={(e) => setNcheck(Number(e.target.value))}
-            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
-          Data
-          <input
-            type="number"
-            min={1}
-            max={50}
-            value={ndata}
-            onChange={(e) => setNdata(Number(e.target.value))}
-            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
-          Density
-          <input
-            type="number"
-            min={0.05}
-            max={1}
-            step={0.05}
-            value={density}
-            onChange={(e) => setDensity(Number(e.target.value))}
-            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
-          P(0)
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={prob0}
-            onChange={(e) => setProb0(Number(e.target.value))}
-            className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
-          />
-        </label>
-        <button
-          onClick={generate}
-          className="rounded-lg bg-indigo-600 px-5 py-1.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/20 transition-all hover:bg-indigo-500 hover:shadow-indigo-500/30 active:scale-95"
-        >
-          Generate
-        </button>
+      <div className="flex flex-wrap items-end gap-6">
+        {/* Graph structure controls */}
+        <div className="flex items-end gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-5 py-3 shadow-lg backdrop-blur-sm">
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+            Check
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={ncheck}
+              onChange={(e) => setNcheck(Number(e.target.value))}
+              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+            Data
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={ndata}
+              onChange={(e) => setNdata(Number(e.target.value))}
+              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+            Density
+            <input
+              type="number"
+              min={0.05}
+              max={1}
+              step={0.05}
+              value={density}
+              onChange={(e) => setDensity(Number(e.target.value))}
+              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+            />
+          </label>
+          <button
+            onClick={generateGraph}
+            className="rounded-lg bg-indigo-600 px-5 py-1.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/20 transition-all hover:bg-indigo-500 hover:shadow-indigo-500/30 active:scale-95"
+          >
+            New Graph
+          </button>
+        </div>
+
+        {/* Data state controls */}
+        <div className="flex items-end gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-5 py-3 shadow-lg backdrop-blur-sm">
+          <label className="flex flex-col gap-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
+            P(0)
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={prob0}
+              onChange={(e) => setProb0(Number(e.target.value))}
+              className="w-20 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-center text-sm text-zinc-200 outline-none transition-colors focus:border-indigo-500/50 focus:bg-white/[0.06]"
+            />
+          </label>
+          <button
+            onClick={handleRandomize}
+            disabled={!graph}
+            className="rounded-lg bg-orange-600 px-5 py-1.5 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-500 hover:shadow-orange-500/30 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+          >
+            Randomize
+          </button>
+        </div>
       </div>
 
       {/* Legend */}
@@ -352,7 +377,7 @@ export default function LdpcGraph() {
       {graph && (
         <div ref={svgContainerRef} className="w-full" style={{ height: svgHeight > 0 ? svgHeight : undefined }}>
           <svg
-            viewBox="0 0 1200 900"
+            viewBox="0 0 1000 1000"
             preserveAspectRatio="xMidYMid meet"
             className="h-full w-full rounded-xl border border-white/[0.04] bg-[#0e0e18]"
           >
