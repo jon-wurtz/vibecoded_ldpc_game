@@ -205,6 +205,7 @@ export default function LdpcGraph() {
   const [ncheck, setNcheck] = useState(20);
   const [ndata, setNdata] = useState(20);
   const [density, setDensity] = useState(0.15);
+  const [prob0, setProb0] = useState(0.9);
   const [graph, setGraph] = useState<Graph | null>(null);
   const [positions, setPositions] = useState<Map<string, NodePos>>(new Map());
   const [nodeColors, setNodeColors] = useState<Map<string, string>>(new Map());
@@ -223,13 +224,37 @@ export default function LdpcGraph() {
   const generate = useCallback(() => {
     const g = makeLdpcCode(ncheck, ndata, density);
     const pos = computeLayout(g);
+
+    // Build adjacency for parity computation
+    const adj = new Map<string, string[]>();
+    for (const node of [...g.checkNodes, ...g.dataNodes]) adj.set(node, []);
+    for (const [a, b] of g.edges) {
+      adj.get(a)!.push(b);
+      adj.get(b)!.push(a);
+    }
+
+    // Each data node gets a random hidden state (0 or 1), displayed as black on screen
+    const dataState = new Map<string, number>();
+    for (const node of g.dataNodes) {
+      dataState.set(node, Math.random() < prob0 ? 0 : 1);
+    }
+
     const colors = new Map<string, string>();
-    for (const node of g.checkNodes) colors.set(node, CHECK_COLOR);
-    for (const node of g.dataNodes) colors.set(node, DATA_COLOR);
+    // Data nodes all start as black (DATA_TOGGLED) on screen
+    for (const node of g.dataNodes) colors.set(node, DATA_TOGGLED);
+    // Check nodes get color based on parity of neighboring data node hidden states
+    for (const node of g.checkNodes) {
+      const parity = (adj.get(node) || []).reduce(
+        (sum, neighbor) => sum + (dataState.get(neighbor) || 0),
+        0
+      ) % 2;
+      colors.set(node, parity === 0 ? CHECK_COLOR : CHECK_TOGGLED);
+    }
+
     setGraph(g);
     setPositions(pos);
     setNodeColors(colors);
-  }, [ncheck, ndata, density]);
+  }, [ncheck, ndata, density, prob0]);
 
   const handleNodeClick = useCallback(
     (node: string) => {
@@ -300,6 +325,18 @@ export default function LdpcGraph() {
             step={0.05}
             value={density}
             onChange={(e) => setDensity(Number(e.target.value))}
+            className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm font-medium">
+          P(0)
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={prob0}
+            onChange={(e) => setProb0(Number(e.target.value))}
             className="w-24 rounded border border-zinc-300 px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800"
           />
         </label>
