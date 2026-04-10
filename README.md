@@ -1,3 +1,12 @@
+## Front matter
+
+This is a vibe-coded webapp using Claude produced in ~3 hours. The initial app was seeded by a hand-written python file (`make_ldpc_code.py`) and then converted. The intent is to make a puzzle game where the user tries to identify the errors on a classical ldpc code by minimizing the number of parity check errors.
+
+Disclaimer: everything is vibe coded and thus possibly slop. The graph generation is just an Edros-Renyi random Tanner graph with no guarantees of code distance or encoding rate, and the hidden noise is produced purely randomly with no notion of any code distance. Generally decoding these graphs is really hard, which can be frustrating. A future To Do is to make more structured ldpc instances (think something like a {classical} surface code or algebraic constructions) that have some notion of an actual code distance and decoding hardness.
+
+
+## AI boilerplate:
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
