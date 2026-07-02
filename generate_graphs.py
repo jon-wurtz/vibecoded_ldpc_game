@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import networkx as nx
 
@@ -21,6 +22,55 @@ def normalize_positions(pos_dict, padding=60, canvas=1000):
         }
         for node, (x, y) in pos_dict.items()
     }
+
+
+def gf2_rank(rows):
+    """Rank of a matrix over GF(2)."""
+    A = [row[:] for row in rows]
+    m, n = len(A), len(A[0])
+    rank = 0
+    for col in range(n):
+        found = next((r for r in range(rank, m) if A[r][col]), -1)
+        if found == -1:
+            continue
+        A[rank], A[found] = A[found], A[rank]
+        for r in range(m):
+            if r != rank and A[r][col]:
+                A[r] = [A[r][j] ^ A[rank][j] for j in range(n)]
+        rank += 1
+    return rank
+
+
+def gf2_nullspace(H):
+    """Basis for the null space of H over GF(2): vectors x s.t. H @ x = 0."""
+    m = len(H)
+    if m == 0:
+        return []
+    n = len(H[0])
+    A = [row[:] for row in H]
+    pivot_cols_ordered = []
+    pivot_of_col = {}
+    pivot_row = 0
+    for col in range(n):
+        found = next((r for r in range(pivot_row, m) if A[r][col]), -1)
+        if found == -1:
+            continue
+        A[pivot_row], A[found] = A[found], A[pivot_row]
+        for r in range(m):
+            if r != pivot_row and A[r][col]:
+                A[r] = [A[r][j] ^ A[pivot_row][j] for j in range(n)]
+        pivot_of_col[col] = pivot_row
+        pivot_cols_ordered.append(col)
+        pivot_row += 1
+    free_cols = [c for c in range(n) if c not in pivot_of_col]
+    basis = []
+    for fc in free_cols:
+        vec = [0] * n
+        vec[fc] = 1
+        for i, pc in enumerate(pivot_cols_ordered):
+            vec[pc] = A[i][fc]
+        basis.append(vec)
+    return basis
 
 
 def make_repetition_code(n_data=7):
@@ -127,8 +177,122 @@ def make_graph_code(n_vertices=10, connectivity=4, seed=42):
     }
 
 
+def make_hamming_code():
+    """[7,4,3] Hamming code: 7 data bits, 3 parity checks, distance 3."""
+    n, r = 7, 3
+    data_nodes = [f"data_{i}" for i in range(n)]
+    check_nodes = [f"check_{i}" for i in range(r)]
+
+    # H: column j has the binary representation of (j+1), row = bit position
+    H = [[(j + 1) >> bit & 1 for j in range(n)] for bit in range(r)]
+
+    B = nx.Graph()
+    edges = []
+    for i, row in enumerate(H):
+        for j, val in enumerate(row):
+            if val:
+                B.add_edge(f"check_{i}", f"data_{j}")
+                edges.append([f"check_{i}", f"data_{j}"])
+
+    G_mat = gf2_nullspace(H)  # 4 logical codewords
+
+    pos_raw = nx.kamada_kawai_layout(B)
+    pos = {node: (float(pos_raw[node][0]), float(pos_raw[node][1])) for node in B.nodes()}
+
+    return {
+        "id": "hamming-7-4-3",
+        "name": "Hamming [7,4,3]",
+        "maxErrorProb": 0.3,
+        "checkNodes": check_nodes,
+        "dataNodes": data_nodes,
+        "edges": edges,
+        "positions": normalize_positions(pos),
+        "H": H,
+        "G": G_mat,
+    }
+
+
+def make_golay_code():
+    """[23,12,7] Golay code: 23 data bits, 11 parity checks, distance 7.
+
+    Built as a cyclic code via generator polynomial
+    g(x) = 1 + x^2 + x^4 + x^5 + x^6 + x^10 + x^11.
+    The parity check matrix (dual code) has 11 rows each of weight 8.
+
+    Layout uses the Z_23 cyclic structure directly:
+    - Data nodes i = 0..22 sit at angle 2πi/23 on the outer circle.
+    - Each check node's angle is the circular centroid of its 8 connected
+      data positions on the Z_23 circle; it is placed on an inner ring.
+    """
+    n, k = 23, 12
+    r = n - k  # 11 checks
+    data_nodes = [f"data_{i}" for i in range(n)]
+    check_nodes = [f"check_{i}" for i in range(r)]
+
+    # Generator matrix G (k×n): row i is x^i * g(x) mod x^23 + 1
+    g_offsets = [0, 2, 4, 5, 6, 10, 11]
+    G_mat = []
+    for i in range(k):
+        row = [0] * n
+        for p in g_offsets:
+            row[(i + p) % n] ^= 1
+        G_mat.append(row)
+
+    # H: null space of G gives rows of the parity check matrix (dual code, weight 8)
+    H_mat = gf2_nullspace(G_mat)
+
+    # --- Algebraic layout based on Z_23 cyclic structure ---
+    # Build circulant H: shift the seed row by 0, 2, 4, ..., 20 in Z_23.
+    # Step-2 spacing gives 11 distinct shifts covering Z_23, uniform layout.
+    seed = gf2_nullspace(G_mat)[0]
+    chosen_shifts = [2 * i for i in range(r)]  # [0, 2, 4, ..., 20]
+    H_mat = [[seed[(j - s) % n] for j in range(n)] for s in chosen_shifts]
+    if gf2_rank(H_mat) < r:
+        # Fallback: use raw nullspace basis
+        H_mat = gf2_nullspace(G_mat)
+        chosen_shifts = list(range(r))
+
+    R_data = 1.0
+    R_check = 0.42  # inner ring for check nodes
+
+    pos = {}
+
+    # Data nodes: evenly around the unit circle, starting at the top
+    for i in range(n):
+        a = 2 * math.pi * i / n - math.pi / 2
+        pos[f"data_{i}"] = (R_data * math.cos(a), R_data * math.sin(a))
+
+    # Check_ci (shift s) placed at angle 2π*s/23 on inner circle
+    for ci, s in enumerate(chosen_shifts):
+        a = 2 * math.pi * s / n - math.pi / 2
+        pos[f"check_{ci}"] = (R_check * math.cos(a), R_check * math.sin(a))
+
+    edges = []
+    for i, row in enumerate(H_mat):
+        for j, val in enumerate(row):
+            if val:
+                edges.append([f"check_{i}", f"data_{j}"])
+
+    return {
+        "id": "golay-23-12-7",
+        "name": "Golay [23,12,7]",
+        "maxErrorProb": 0.2,
+        "checkNodes": check_nodes,
+        "dataNodes": data_nodes,
+        "edges": edges,
+        "positions": normalize_positions(pos),
+        "H": H_mat,
+        "G": G_mat,
+    }
+
+
 if __name__ == "__main__":
-    graphs = [make_repetition_code(n_data=7), make_graph_code(n_vertices=10, connectivity=4)]
+    graphs = [
+        make_repetition_code(n_data=7),
+        make_hamming_code(),
+        make_golay_code(),
+        make_graph_code(n_vertices=10, connectivity=4),
+    ]
     for g in graphs:
         path = os.path.join(GRAPHS_DIR, f"{g['id']}.json")
         with open(path, "w") as f:
