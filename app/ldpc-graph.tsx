@@ -8,18 +8,26 @@ interface Graph {
   edges: [string, string][];
 }
 
-interface NodePos {
-  x: number;
-  y: number;
+interface GraphMeta {
+  id: string;
+  name: string;
+}
+
+interface GraphData {
+  id: string;
+  name: string;
+  maxErrorProb: number;
+  checkNodes: string[];
+  dataNodes: string[];
+  edges: [string, string][];
+  positions: Record<string, { x: number; y: number }>;
 }
 
 interface HistoryEntry {
-  ncheck: number;
-  ndata: number;
-  density: number;
+  graphId: string;
+  graphName: string;
   prob0: number;
   score: number;
-  graphSeed: number;
   dataSeed: number;
   flips?: string;
 }
@@ -37,34 +45,6 @@ function mulberry32(seed: number): () => number {
 
 function newSeed(): number {
   return (Math.random() * 0xffffffff) >>> 0;
-}
-
-function makeLdpcCode(
-  ncheck: number,
-  ndata: number,
-  density: number,
-  seed: number
-): Graph {
-  const rand = mulberry32(seed);
-  const checkNodes = Array.from({ length: ncheck }, (_, i) => `check_${i}`);
-  const dataNodes = Array.from({ length: ndata }, (_, i) => `data_${i}`);
-  const edges: [string, string][] = [];
-
-  const edgeCount = Math.max(1, Math.round(density * ncheck));
-
-  for (let i = 0; i < ndata; i++) {
-    const indices = Array.from({ length: ncheck }, (_, j) => j);
-    for (let j = indices.length - 1; j > 0; j--) {
-      const k = Math.floor(rand() * (j + 1));
-      [indices[j], indices[k]] = [indices[k], indices[j]];
-    }
-    const selected = indices.slice(0, edgeCount);
-    for (const idx of selected) {
-      edges.push([`data_${i}`, `check_${idx}`]);
-    }
-  }
-
-  return { checkNodes, dataNodes, edges };
 }
 
 function buildAdj(g: Graph): Map<string, string[]> {
@@ -125,10 +105,8 @@ function applyFlips(
     if ((bits >> BigInt(i)) & BigInt(1)) {
       const node = `data_${i}`;
       if (!next.has(node)) continue;
-      // Flip data node
       const cur = next.get(node);
       next.set(node, cur === DATA_TOGGLED ? DATA_COLOR : DATA_TOGGLED);
-      // Flip adjacent check nodes
       for (const neighbor of adj.get(node) || []) {
         const cc = next.get(neighbor);
         if (cc === CHECK_COLOR) next.set(neighbor, CHECK_TOGGLED);
@@ -139,162 +117,6 @@ function applyFlips(
   return next;
 }
 
-function computeLayout(graph: Graph): Map<string, NodePos> {
-  const allNodes = [...graph.checkNodes, ...graph.dataNodes];
-  const n = allNodes.length;
-  const nodeIndex = new Map<string, number>();
-  allNodes.forEach((node, i) => nodeIndex.set(node, i));
-
-  const adj: number[][] = Array.from({ length: n }, () => []);
-  for (const [a, b] of graph.edges) {
-    const ai = nodeIndex.get(a)!;
-    const bi = nodeIndex.get(b)!;
-    adj[ai].push(bi);
-    adj[bi].push(ai);
-  }
-
-  const dist: number[][] = Array.from({ length: n }, () =>
-    new Array(n).fill(Infinity)
-  );
-  for (let s = 0; s < n; s++) {
-    dist[s][s] = 0;
-    const queue = [s];
-    let head = 0;
-    while (head < queue.length) {
-      const u = queue[head++];
-      for (const v of adj[u]) {
-        if (dist[s][v] === Infinity) {
-          dist[s][v] = dist[s][u] + 1;
-          queue.push(v);
-        }
-      }
-    }
-  }
-
-  const maxFinite = Math.max(
-    1,
-    ...dist.flatMap((row) => row.filter((d) => d < Infinity))
-  );
-  for (let i = 0; i < n; i++)
-    for (let j = 0; j < n; j++)
-      if (dist[i][j] === Infinity) dist[i][j] = maxFinite + 1;
-
-  const L = 80;
-  const dij: number[][] = Array.from({ length: n }, (_, i) =>
-    Array.from({ length: n }, (_, j) => dist[i][j] * L)
-  );
-  const kij: number[][] = Array.from({ length: n }, (_, i) =>
-    Array.from({ length: n }, (_, j) =>
-      i === j ? 0 : 1 / (dist[i][j] * dist[i][j])
-    )
-  );
-
-  const x = new Float64Array(n);
-  const y = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const angle = (2 * Math.PI * i) / n;
-    x[i] = Math.cos(angle) * 100;
-    y[i] = Math.sin(angle) * 100;
-  }
-
-  const maxIter = 200 * n;
-  const epsilon = 1e-2;
-
-  for (let iter = 0; iter < maxIter; iter++) {
-    let maxDelta = -1;
-    let m = -1;
-    for (let i = 0; i < n; i++) {
-      let dEdx = 0;
-      let dEdy = 0;
-      for (let j = 0; j < n; j++) {
-        if (i === j) continue;
-        const dx = x[i] - x[j];
-        const dy = y[i] - y[j];
-        const eucl = Math.sqrt(dx * dx + dy * dy) || 1e-6;
-        dEdx += kij[i][j] * (dx - (dij[i][j] * dx) / eucl);
-        dEdy += kij[i][j] * (dy - (dij[i][j] * dy) / eucl);
-      }
-      const delta = Math.sqrt(dEdx * dEdx + dEdy * dEdy);
-      if (delta > maxDelta) {
-        maxDelta = delta;
-        m = i;
-      }
-    }
-
-    if (maxDelta < epsilon) break;
-
-    for (let inner = 0; inner < 50; inner++) {
-      let dEdx = 0;
-      let dEdy = 0;
-      let d2Edx2 = 0;
-      let d2Edy2 = 0;
-      let d2Edxdy = 0;
-
-      for (let j = 0; j < n; j++) {
-        if (j === m) continue;
-        const dx = x[m] - x[j];
-        const dy = y[m] - y[j];
-        const eucl2 = dx * dx + dy * dy;
-        const eucl = Math.sqrt(eucl2) || 1e-6;
-        const eucl3 = eucl2 * eucl;
-        const k = kij[m][j];
-        const d = dij[m][j];
-
-        dEdx += k * (dx - (d * dx) / eucl);
-        dEdy += k * (dy - (d * dy) / eucl);
-        d2Edx2 += k * (1 - (d * dy * dy) / eucl3);
-        d2Edy2 += k * (1 - (d * dx * dx) / eucl3);
-        d2Edxdy += k * ((d * dx * dy) / eucl3);
-      }
-
-      const det = d2Edx2 * d2Edy2 - d2Edxdy * d2Edxdy;
-      if (Math.abs(det) < 1e-12) break;
-
-      const deltaX = -(d2Edy2 * dEdx - d2Edxdy * dEdy) / det;
-      const deltaY = -(-d2Edxdy * dEdx + d2Edx2 * dEdy) / det;
-
-      x[m] += deltaX;
-      y[m] += deltaY;
-
-      if (deltaX * deltaX + deltaY * deltaY < epsilon * epsilon) break;
-    }
-  }
-
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (let i = 0; i < n; i++) {
-    if (x[i] < minX) minX = x[i];
-    if (x[i] > maxX) maxX = x[i];
-    if (y[i] < minY) minY = y[i];
-    if (y[i] > maxY) maxY = y[i];
-  }
-  const rangeX = maxX - minX || 1;
-  const rangeY = maxY - minY || 1;
-  const padding = 60;
-  const width = 1000;
-  const height = 1000;
-
-  const positions = new Map<string, NodePos>();
-  for (let i = 0; i < n; i++) {
-    positions.set(allNodes[i], {
-      x: padding + ((x[i] - minX) / rangeX) * (width - 2 * padding),
-      y: padding + ((y[i] - minY) / rangeY) * (height - 2 * padding),
-    });
-  }
-
-  return positions;
-}
-
-const CHECK_COLOR = "#670EFF";
-const CHECK_TOGGLED = "#f97316";
-const DATA_COLOR = "#475569";
-const DATA_TOGGLED = "#e2e8f0";
-
-function getGraphDifficulty(entry: { ncheck: number; ndata: number }): { label: string; color: string } {
-  if (entry.ncheck <= 10 && entry.ndata <= 10) return { label: "Easy", color: "text-emerald-600" };
-  if (entry.ncheck <= 20 && entry.ndata <= 20) return { label: "Medium", color: "text-amber-500" };
-  return { label: "Hard", color: "text-red-600" };
-}
-
 function getFlipDifficulty(prob0: number): { label: string; color: string } {
   if (prob0 >= 0.97) return { label: "Easy", color: "text-emerald-600" };
   if (prob0 >= 0.95) return { label: "Medium", color: "text-amber-500" };
@@ -303,11 +125,8 @@ function getFlipDifficulty(prob0: number): { label: string; color: string } {
 
 function makeShareUrl(entry: HistoryEntry): string {
   const obj: Record<string, string> = {
-    c: String(entry.ncheck),
-    d: String(entry.ndata),
-    k: String(entry.density),
+    g: entry.graphId,
     p: String(entry.prob0),
-    gs: String(entry.graphSeed),
     ds: String(entry.dataSeed),
   };
   if (entry.flips) {
@@ -318,99 +137,91 @@ function makeShareUrl(entry: HistoryEntry): string {
   return `${window.location.origin}${window.location.pathname}?${params}`;
 }
 
+const CHECK_COLOR = "#670EFF";
+const CHECK_TOGGLED = "#f97316";
+const DATA_COLOR = "#475569";
+const DATA_TOGGLED = "#e2e8f0";
+
 export default function LdpcGraph() {
-  const [ncheck, setNcheck] = useState(20);
-  const [ndata, setNdata] = useState(20);
-  const [density, setDensity] = useState(0.15);
+  const [graphList, setGraphList] = useState<GraphMeta[]>([]);
+  const [selectedGraphId, setSelectedGraphId] = useState<string>("");
+  const [selectedGraphName, setSelectedGraphName] = useState<string>("");
+  const [maxErrorProb, setMaxErrorProb] = useState(0.4);
+  const [errorProb, setErrorProb] = useState(0.1);
   const [prob0, setProb0] = useState(0.9);
   const [graph, setGraph] = useState<Graph | null>(null);
-  const [positions, setPositions] = useState<Map<string, NodePos>>(new Map());
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [nodeColors, setNodeColors] = useState<Map<string, string>>(new Map());
-  const [graphSeed, setGraphSeed] = useState(0);
   const [dataSeed, setDataSeed] = useState(0);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [sharePopover, setSharePopover] = useState<number | null>(null);
   const [frozen, setFrozen] = useState(false);
-  // Challenge info from a shared link
   const [challenge, setChallenge] = useState<{ score: number; flips: string } | null>(null);
   const [showingChallenger, setShowingChallenger] = useState(false);
+  const [initialColors, setInitialColors] = useState<Map<string, string>>(new Map());
 
   const adjacency = useMemo(() => {
     if (!graph) return new Map<string, string[]>();
     return buildAdj(graph);
   }, [graph]);
 
-  // The initial colors for the current instance (before player moves)
-  const [initialColors, setInitialColors] = useState<Map<string, string>>(new Map());
-
-  const loadInstance = useCallback(
-    (c: number, d: number, k: number, p: number, gs: number, ds: number) => {
-      const g = makeLdpcCode(c, d, k, gs);
-      const pos = computeLayout(g);
+  const loadGraphById = useCallback(
+    async (graphId: string, p: number, ds: number) => {
+      const res = await fetch(`/api/graphs/${graphId}`);
+      if (!res.ok) return;
+      const gd: GraphData = await res.json();
+      const g: Graph = {
+        checkNodes: gd.checkNodes,
+        dataNodes: gd.dataNodes,
+        edges: gd.edges,
+      };
       const adj = buildAdj(g);
       const colors = computeColors(g, adj, p, ds);
-      setNcheck(c);
-      setNdata(d);
-      setDensity(k);
-      setProb0(p);
-      setGraphSeed(gs);
-      setDataSeed(ds);
+      setSelectedGraphId(graphId);
+      setSelectedGraphName(gd.name);
+      setMaxErrorProb(gd.maxErrorProb);
+      setErrorProb(1 - p);
       setGraph(g);
-      setPositions(pos);
+      setPositions(gd.positions);
+      setProb0(p);
+      setDataSeed(ds);
       setNodeColors(colors);
       setInitialColors(colors);
       setFrozen(false);
       setShowingChallenger(false);
+      setChallenge(null);
     },
     []
   );
 
+  // Fetch graph list on mount
+  useEffect(() => {
+    fetch("/api/graphs")
+      .then((r) => r.json())
+      .then(setGraphList)
+      .catch(console.error);
+  }, []);
+
   // On mount, check URL for shared instance
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const c = params.get("c");
-    const d = params.get("d");
-    const k = params.get("k");
+    const g = params.get("g");
     const p = params.get("p");
-    const gs = params.get("gs");
     const ds = params.get("ds");
-    if (c && d && k && p && gs && ds) {
-      loadInstance(
-        Number(c), Number(d), Number(k), Number(p), Number(gs), Number(ds)
-      );
-      const f = params.get("f");
-      const sc = params.get("sc");
-      if (f && sc) {
-        setChallenge({ score: Number(sc), flips: f });
-      } else {
-        setChallenge(null);
-      }
+    if (g && p && ds) {
+      loadGraphById(g, Number(p), Number(ds)).then(() => {
+        const f = params.get("f");
+        const sc = params.get("sc");
+        if (f && sc) {
+          setChallenge({ score: Number(sc), flips: f });
+        } else {
+          setChallenge(null);
+        }
+      });
       window.history.replaceState({}, "", window.location.pathname);
     }
-  }, [loadInstance]);
-
-  const generateGraph = useCallback((c: number, d: number, k: number, p: number) => {
-    const gs = newSeed();
-    const ds = newSeed();
-    const g = makeLdpcCode(c, d, k, gs);
-    const pos = computeLayout(g);
-    const adj = buildAdj(g);
-    const colors = computeColors(g, adj, p, ds);
-    setNcheck(c);
-    setNdata(d);
-    setDensity(k);
-    setProb0(p);
-    setGraphSeed(gs);
-    setDataSeed(ds);
-    setGraph(g);
-    setPositions(pos);
-    setNodeColors(colors);
-    setInitialColors(colors);
-    setFrozen(false);
-    setChallenge(null);
-    setShowingChallenger(false);
-  }, []);
+  }, [loadGraphById]);
 
   const score = useMemo(() => {
     if (!graph) return 0;
@@ -421,8 +232,9 @@ export default function LdpcGraph() {
     return count;
   }, [graph, nodeColors]);
 
-  const handleRandomize = useCallback((p: number) => {
+  const handleRandomize = useCallback(() => {
     if (!graph) return;
+    const p = 1 - errorProb;
     const ds = newSeed();
     const adj = buildAdj(graph);
     const colors = computeColors(graph, adj, p, ds);
@@ -433,7 +245,7 @@ export default function LdpcGraph() {
     setFrozen(false);
     setChallenge(null);
     setShowingChallenger(false);
-  }, [graph]);
+  }, [graph, errorProb]);
 
   const handleSubmit = useCallback(() => {
     if (!graph || frozen) return;
@@ -441,9 +253,9 @@ export default function LdpcGraph() {
     setFrozen(true);
     setHistory((prev) => [
       ...prev,
-      { ncheck, ndata, density, prob0, score, graphSeed, dataSeed, flips },
+      { graphId: selectedGraphId, graphName: selectedGraphName, prob0, score, dataSeed, flips },
     ]);
-  }, [graph, frozen, nodeColors, ncheck, ndata, density, prob0, score, graphSeed, dataSeed]);
+  }, [graph, frozen, nodeColors, selectedGraphId, selectedGraphName, prob0, score, dataSeed]);
 
   const handleNodeClick = useCallback(
     (node: string) => {
@@ -467,11 +279,9 @@ export default function LdpcGraph() {
   const toggleChallengerView = useCallback(() => {
     if (!challenge || !graph) return;
     if (showingChallenger) {
-      // Restore player's current state
       setNodeColors(initialColors);
       setShowingChallenger(false);
     } else {
-      // Show challenger's solution
       const solved = applyFlips(initialColors, adjacency, challenge.flips);
       setNodeColors(solved);
       setShowingChallenger(true);
@@ -537,52 +347,53 @@ export default function LdpcGraph() {
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-4">
-        {/* Difficulty buttons */}
+        {/* Graph selector */}
         <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
-          <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">New Game</span>
-          <button
-            onClick={() => generateGraph(10, 10, 0.3, 0.9)}
-            className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-500 active:scale-95"
+          <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">Graph</span>
+          <select
+            value={selectedGraphId}
+            onChange={(e) => setSelectedGraphId(e.target.value)}
+            className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-700 shadow-sm"
           >
-            Easy
-          </button>
+            <option value="" disabled>Select a graph…</option>
+            {graphList.map((gm) => (
+              <option key={gm.id} value={gm.id}>{gm.name}</option>
+            ))}
+          </select>
           <button
-            onClick={() => generateGraph(20, 20, 0.15, 0.9)}
-            className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-amber-400 active:scale-95"
+            onClick={() => {
+              if (!selectedGraphId) return;
+              loadGraphById(selectedGraphId, prob0, newSeed());
+            }}
+            disabled={!selectedGraphId}
+            className="rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
           >
-            Medium
-          </button>
-          <button
-            onClick={() => generateGraph(40, 40, 0.08, 0.94)}
-            className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-red-500 active:scale-95"
-          >
-            Hard
+            New Game
           </button>
         </div>
 
         {/* Randomize */}
-        <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
-          <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">Randomize</span>
-          <button
-            onClick={() => handleRandomize(0.97)}
+        <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
+          <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">Error rate</span>
+          <input
+            type="range"
+            min={0}
+            max={maxErrorProb}
+            step={0.01}
+            value={errorProb}
             disabled={!graph}
-            className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
-          >
-            Easy
-          </button>
+            onChange={(e) => setErrorProb(Number(e.target.value))}
+            className="w-32 accent-violet-600 disabled:opacity-40"
+          />
+          <span className="w-10 text-right text-sm tabular-nums text-zinc-600">
+            {Math.round(errorProb * 100)}%
+          </span>
           <button
-            onClick={() => handleRandomize(0.95)}
+            onClick={handleRandomize}
             disabled={!graph}
-            className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-amber-400 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+            className="rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
           >
-            Medium
-          </button>
-          <button
-            onClick={() => handleRandomize(0.9)}
-            disabled={!graph}
-            className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-red-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
-          >
-            Hard
+            Randomize
           </button>
         </div>
 
@@ -664,8 +475,8 @@ export default function LdpcGraph() {
 
             {/* Edges */}
             {graph.edges.map(([a, b], i) => {
-              const pa = positions.get(a);
-              const pb = positions.get(b);
+              const pa = positions[a];
+              const pb = positions[b];
               if (!pa || !pb) return null;
               const aOrange = nodeColors.get(a) === CHECK_TOGGLED;
               const bOrange = nodeColors.get(b) === CHECK_TOGGLED;
@@ -686,7 +497,7 @@ export default function LdpcGraph() {
 
             {/* Nodes */}
             {[...graph.checkNodes, ...graph.dataNodes].map((node) => {
-              const pos = positions.get(node);
+              const pos = positions[node];
               if (!pos) return null;
               const isData = node.startsWith("data_");
               const color = nodeColors.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
@@ -752,9 +563,7 @@ export default function LdpcGraph() {
                       >
                         <td className="px-2 py-1.5 tabular-nums text-zinc-500">{i + 1}</td>
                         <td className="px-2 py-1.5">
-                          <span className={`font-semibold ${getGraphDifficulty(entry).color}`}>
-                            {getGraphDifficulty(entry).label}
-                          </span>
+                          <span className="font-semibold text-zinc-600">{entry.graphName}</span>
                         </td>
                         <td className="px-2 py-1.5">
                           <span className={`font-semibold ${getFlipDifficulty(entry.prob0).color}`}>
@@ -798,6 +607,7 @@ export default function LdpcGraph() {
           </div>
         </div>
       )}
+
       {/* Share modal */}
       {sharePopover !== null && history[sharePopover] && (() => {
         const entry = history[sharePopover];
