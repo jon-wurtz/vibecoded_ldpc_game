@@ -21,13 +21,16 @@ interface GraphData {
   dataNodes: string[];
   edges: [string, string][];
   positions: Record<string, { x: number; y: number }>;
+  H: number[][];
+  G: number[][];
 }
 
 interface HistoryEntry {
   graphId: string;
   graphName: string;
   prob0: number;
-  score: number;
+  logicalError: boolean;
+  bitsFlipped: number;
   dataSeed: number;
   flips?: string;
 }
@@ -131,7 +134,7 @@ function makeShareUrl(entry: HistoryEntry): string {
   };
   if (entry.flips) {
     obj.f = entry.flips;
-    obj.sc = String(entry.score);
+    obj.le = entry.logicalError ? "1" : "0";
   }
   const params = new URLSearchParams(obj);
   return `${window.location.origin}${window.location.pathname}?${params}`;
@@ -150,17 +153,24 @@ export default function LdpcGraph() {
   const [errorProb, setErrorProb] = useState(0.1);
   const [prob0, setProb0] = useState(0.9);
   const [graph, setGraph] = useState<Graph | null>(null);
+  const [matG, setMatG] = useState<number[][]>([]);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [nodeColors, setNodeColors] = useState<Map<string, string>>(new Map());
   const [dataSeed, setDataSeed] = useState(0);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [sharePopover, setSharePopover] = useState<number | null>(null);
-  const [frozen, setFrozen] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [challenge, setChallenge] = useState<{ score: number; flips: string } | null>(null);
+  const [assessmentMode, setAssessmentMode] = useState(false);
+  const [assessmentSuccess, setAssessmentSuccess] = useState(false);
+  const [assessmentMessage, setAssessmentMessage] = useState<string>("");
+  const [hiddenErrorNodes, setHiddenErrorNodes] = useState<Set<string>>(new Set());
+  const [challenge, setChallenge] = useState<{ logicalError: boolean; flips: string } | null>(null);
   const [showingChallenger, setShowingChallenger] = useState(false);
   const [initialColors, setInitialColors] = useState<Map<string, string>>(new Map());
+  const lastChallengeTimeRef = useRef<number>(0);
+  const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const graphRef = useRef<Graph | null>(null);
+  const errorProbRef = useRef<number>(0.1);
 
   const adjacency = useMemo(() => {
     if (!graph) return new Map<string, string[]>();
@@ -169,6 +179,10 @@ export default function LdpcGraph() {
 
   const loadGraphById = useCallback(
     async (graphId: string, p: number, ds: number) => {
+      if (advanceTimerRef.current !== null) {
+        clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = null;
+      }
       const res = await fetch(`/api/graphs/${graphId}`);
       if (!res.ok) return;
       const gd: GraphData = await res.json();
@@ -184,14 +198,17 @@ export default function LdpcGraph() {
       setMaxErrorProb(gd.maxErrorProb);
       setErrorProb(1 - p);
       setGraph(g);
+      setMatG(gd.G);
       setPositions(gd.positions);
       setProb0(p);
       setDataSeed(ds);
       setNodeColors(colors);
       setInitialColors(colors);
-      setFrozen(false);
+      setAssessmentMode(false);
+      setHiddenErrorNodes(new Set());
       setShowingChallenger(false);
       setChallenge(null);
+      lastChallengeTimeRef.current = Date.now();
     },
     []
   );
@@ -213,9 +230,9 @@ export default function LdpcGraph() {
     if (g && p && ds) {
       loadGraphById(g, Number(p), Number(ds)).then(() => {
         const f = params.get("f");
-        const sc = params.get("sc");
-        if (f && sc) {
-          setChallenge({ score: Number(sc), flips: f });
+        const le = params.get("le");
+        if (f && le !== null) {
+          setChallenge({ logicalError: le === "1", flips: f });
         } else {
           setChallenge(null);
         }
@@ -224,48 +241,54 @@ export default function LdpcGraph() {
     }
   }, [loadGraphById]);
 
-  const score = useMemo(() => {
-    if (!graph) return 0;
-    let count = 0;
-    for (const node of graph.checkNodes) {
-      if (nodeColors.get(node) === CHECK_TOGGLED) count++;
-    }
-    return count;
-  }, [graph, nodeColors]);
+  const logicalErrors = useMemo(
+    () => history.filter((e) => e.logicalError).length,
+    [history]
+  );
+
+  function evalLogicalError(
+    g: Graph,
+    gMat: number[][],
+    p0: number,
+    seed: number,
+    colors: Map<string, string>
+  ): { isLogicalError: boolean; bitsFlipped: number } {
+    const rand = mulberry32(seed);
+    const hidden = g.dataNodes.map(() => (rand() < p0 ? 0 : 1));
+    const userFlip = g.dataNodes.map((n) => (colors.get(n) === DATA_COLOR ? 1 : 0));
+    const residual = hidden.map((e, i) => e ^ userFlip[i]);
+    const isLogicalError =
+      gMat.length > 0 &&
+      gMat.some((row) => row.reduce((xor, bit, i) => xor ^ (bit & residual[i]), 0) !== 0);
+    const bitsFlipped = residual.reduce((s, b) => s + b, 0);
+    return { isLogicalError, bitsFlipped };
+  }
+
+  // Keep refs in sync so timer callbacks always see latest values
+  useEffect(() => { graphRef.current = graph; }, [graph]);
+  useEffect(() => { errorProbRef.current = errorProb; }, [errorProb]);
+
+  // Stable callback — uses refs, so no deps needed
+  const doAdvance = useCallback(() => {
+    const g = graphRef.current;
+    if (!g) return;
+    const p = 1 - errorProbRef.current;
+    const ds = newSeed();
+    const adj = buildAdj(g);
+    const colors = computeColors(g, adj, p, ds);
+    setProb0(p); setDataSeed(ds);
+    setNodeColors(colors); setInitialColors(colors);
+    setAssessmentMode(false); setHiddenErrorNodes(new Set());
+    setChallenge(null); setShowingChallenger(false);
+    lastChallengeTimeRef.current = Date.now();
+    advanceTimerRef.current = null;
+  }, []);
 
   const handleRandomize = useCallback(() => {
     if (!graph) return;
-    const p = 1 - errorProb;
-    const ds = newSeed();
-    const adj = buildAdj(graph);
-    const colors = computeColors(graph, adj, p, ds);
-    setProb0(p);
-    setDataSeed(ds);
-    setNodeColors(colors);
-    setInitialColors(colors);
-    setFrozen(false);
-    setChallenge(null);
-    setShowingChallenger(false);
-  }, [graph, errorProb]);
-
-  const handleSubmit = useCallback(() => {
-    if (!graph || frozen) return;
-    const flips = encodeFlips(nodeColors, graph.dataNodes.length);
-    setFrozen(true);
-    setHistory((prev) => [
-      ...prev,
-      { graphId: selectedGraphId, graphName: selectedGraphName, prob0, score, dataSeed, flips },
-    ]);
-  }, [graph, frozen, nodeColors, selectedGraphId, selectedGraphName, prob0, score, dataSeed]);
-
-  const handleEnter = useCallback(() => {
-    if (!graph || !selectedGraphId) return;
-    if (!frozen) {
-      const flips = encodeFlips(nodeColors, graph.dataNodes.length);
-      setHistory((prev) => [
-        ...prev,
-        { graphId: selectedGraphId, graphName: selectedGraphName, prob0, score, dataSeed, flips },
-      ]);
+    if (advanceTimerRef.current !== null) {
+      clearTimeout(advanceTimerRef.current);
+      advanceTimerRef.current = null;
     }
     const p = 1 - errorProb;
     const ds = newSeed();
@@ -275,16 +298,75 @@ export default function LdpcGraph() {
     setDataSeed(ds);
     setNodeColors(colors);
     setInitialColors(colors);
-    setFrozen(false);
+    setAssessmentMode(false);
+    setHiddenErrorNodes(new Set());
     setChallenge(null);
     setShowingChallenger(false);
-    setScanning(true);
-    setTimeout(() => setScanning(false), 350);
-  }, [graph, frozen, nodeColors, selectedGraphId, selectedGraphName, prob0, score, dataSeed, errorProb]);
+    lastChallengeTimeRef.current = Date.now();
+  }, [graph, errorProb]);
+
+  const handleSubmit = useCallback(() => {
+    if (!graph || assessmentMode) return;
+    const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, prob0, dataSeed, nodeColors);
+    const rand = mulberry32(dataSeed);
+    const errorNodes = new Set<string>();
+    for (const node of graph.dataNodes) if (rand() >= prob0) errorNodes.add(node);
+    const flips = encodeFlips(nodeColors, graph.dataNodes.length);
+    setHistory((prev) => [
+      ...prev,
+      { graphId: selectedGraphId, graphName: selectedGraphName, prob0, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
+    ]);
+    setAssessmentMode(true);
+    setAssessmentSuccess(!isLogicalError);
+    setHiddenErrorNodes(errorNodes);
+    setAssessmentMessage(isLogicalError ? `Logical Error (${bitsFlipped} bit${bitsFlipped !== 1 ? "s" : ""})` : "Success!");
+    if (!isLogicalError) {
+      const elapsed = Date.now() - lastChallengeTimeRef.current;
+      advanceTimerRef.current = setTimeout(doAdvance, Math.max(250, 2000 - elapsed));
+    }
+  }, [graph, assessmentMode, matG, prob0, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
+
+  const handleEnter = useCallback(() => {
+    if (!graph || !selectedGraphId) return;
+
+    if (!assessmentMode) {
+      // Phase 1: evaluate and enter assessment mode
+      const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, prob0, dataSeed, nodeColors);
+      const rand = mulberry32(dataSeed);
+      const errorNodes = new Set<string>();
+      for (const node of graph.dataNodes) if (rand() >= prob0) errorNodes.add(node);
+      const flips = encodeFlips(nodeColors, graph.dataNodes.length);
+      setHistory((prev) => [
+        ...prev,
+        { graphId: selectedGraphId, graphName: selectedGraphName, prob0, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
+      ]);
+      setAssessmentMode(true);
+      setAssessmentSuccess(!isLogicalError);
+      setHiddenErrorNodes(errorNodes);
+      setAssessmentMessage(isLogicalError ? `Logical Error (${bitsFlipped} bit${bitsFlipped !== 1 ? "s" : ""})` : "Success!");
+      if (!isLogicalError) {
+        // Auto-advance after 0.25s (but no sooner than 2s after last challenge started)
+        const elapsed = Date.now() - lastChallengeTimeRef.current;
+        advanceTimerRef.current = setTimeout(doAdvance, Math.max(250, 2000 - elapsed));
+      }
+    } else {
+      // Phase 2: advance to next challenge (respecting 2s cooldown from last challenge start)
+      if (advanceTimerRef.current !== null) {
+        clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = null;
+      }
+      const remaining = Math.max(0, 2000 - (Date.now() - lastChallengeTimeRef.current));
+      if (remaining > 0) {
+        advanceTimerRef.current = setTimeout(doAdvance, remaining);
+      } else {
+        doAdvance();
+      }
+    }
+  }, [graph, assessmentMode, matG, prob0, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
 
   const handleNodeClick = useCallback(
     (node: string) => {
-      if (frozen || showingChallenger) return;
+      if (assessmentMode || showingChallenger) return;
       if (!node.startsWith("data_")) return;
       setNodeColors((prev) => {
         const next = new Map(prev);
@@ -298,7 +380,7 @@ export default function LdpcGraph() {
         return next;
       });
     },
-    [adjacency, frozen, showingChallenger]
+    [adjacency, assessmentMode, showingChallenger]
   );
 
   const toggleChallengerView = useCallback(() => {
@@ -345,6 +427,12 @@ export default function LdpcGraph() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleEnter]);
 
+  useEffect(() => {
+    return () => {
+      if (advanceTimerRef.current !== null) clearTimeout(advanceTimerRef.current);
+    };
+  }, []);
+
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const [svgHeight, setSvgHeight] = useState(0);
 
@@ -366,9 +454,9 @@ export default function LdpcGraph() {
       {challenge && (
         <div className="flex items-center gap-4 rounded-xl border border-orange-500/20 bg-orange-500/[0.06] px-5 py-2 text-sm">
           <span className="font-semibold text-orange-600">
-            Challenge: someone scored {challenge.score}
+            Challenge: someone got {challenge.logicalError ? "a logical error" : "success"}
           </span>
-          <span className="text-zinc-500">Can you beat it?</span>
+          <span className="text-zinc-500">{challenge.logicalError ? "Can you do better?" : "Can you match it?"}</span>
           <button
             onClick={toggleChallengerView}
             className="rounded-lg border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
@@ -434,14 +522,14 @@ export default function LdpcGraph() {
         {graph && (
           <button
             onClick={handleSubmit}
-            disabled={frozen}
+            disabled={assessmentMode}
             className={`rounded-lg px-5 py-1.5 text-sm font-semibold shadow-md transition-all active:scale-95 ${
-              frozen
-                ? "border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-none cursor-default"
+              assessmentMode
+                ? "border border-zinc-300 bg-zinc-100 text-zinc-400 shadow-none cursor-default"
                 : "bg-emerald-600 text-white shadow-emerald-500/20 hover:bg-emerald-500 hover:shadow-emerald-500/30"
             }`}
           >
-            {frozen ? "Submitted" : "Submit Score"}
+            Submit Score
           </button>
         )}
       </div>
@@ -458,18 +546,17 @@ export default function LdpcGraph() {
             <span className="text-zinc-400">Data</span>
           </span>
           <span className="text-zinc-600">
-            {frozen
-              ? "Score submitted — share the link!"
+            {assessmentMode
+              ? (assessmentSuccess ? "Correct! Next challenge loading…" : "Press Enter for next challenge")
               : showingChallenger
                 ? "Viewing challenger's solution"
                 : "Click a data node to toggle parity"}
           </span>
           <span className="ml-auto flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1">
-            <span className="text-zinc-500 uppercase tracking-wide">Score</span>
-            <span className={`text-lg font-bold tabular-nums ${score === 0 ? "text-emerald-600" : "text-orange-500"}`}>
-              {score}
+            <span className="text-zinc-500 uppercase tracking-wide">Logical Errors</span>
+            <span className={`text-lg font-bold tabular-nums ${logicalErrors === 0 ? "text-emerald-600" : "text-red-500"}`}>
+              {logicalErrors}
             </span>
-            <span className="text-zinc-600">/ {graph.checkNodes.length}</span>
           </span>
         </div>
       )}
@@ -478,12 +565,14 @@ export default function LdpcGraph() {
       {graph && (
         <div ref={svgContainerRef} className="flex w-full gap-3" style={{ height: svgHeight > 0 ? svgHeight : undefined }}>
           <div className="relative h-full flex-1 min-w-0">
-            {scanning && (
-              <div className="pointer-events-none absolute inset-0 z-10">
-                <div
-                  className="absolute inset-0 bg-pink-200/50"
-                  style={{ animation: "flash-pink 0.35s ease-out forwards" }}
-                />
+            {assessmentMode && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                <div className={`absolute inset-0 ${assessmentSuccess ? "bg-green-300/35" : "bg-red-300/35"}`} />
+                {assessmentMessage && (
+                  <span className={`relative z-10 text-2xl font-bold drop-shadow-lg ${assessmentSuccess ? "text-green-800" : "text-red-800"}`}>
+                    {assessmentMessage}
+                  </span>
+                )}
               </div>
             )}
           <svg
@@ -520,8 +609,11 @@ export default function LdpcGraph() {
               const pa = positions[a];
               const pb = positions[b];
               if (!pa || !pb) return null;
-              const aOrange = nodeColors.get(a) === CHECK_TOGGLED;
-              const bOrange = nodeColors.get(b) === CHECK_TOGGLED;
+              // During assessment: check nodes show their original (pre-correction) state
+              const colA = (assessmentMode && !a.startsWith("data_") ? initialColors : nodeColors).get(a);
+              const colB = (assessmentMode && !b.startsWith("data_") ? initialColors : nodeColors).get(b);
+              const aOrange = colA === CHECK_TOGGLED;
+              const bOrange = colB === CHECK_TOGGLED;
               const highlighted = aOrange || bOrange;
               return (
                 <line
@@ -542,7 +634,9 @@ export default function LdpcGraph() {
               const pos = positions[node];
               if (!pos) return null;
               const isData = node.startsWith("data_");
-              const color = nodeColors.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
+              // During assessment: check nodes revert to initial state (original parity violations)
+              const colorMap = assessmentMode && !isData ? initialColors : nodeColors;
+              const color = colorMap.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
               const isOrange = color === CHECK_TOGGLED;
               const radius = isData ? 14 : 11;
 
@@ -551,7 +645,7 @@ export default function LdpcGraph() {
               else if (!isData) filter = "url(#glow-check)";
               else if (color === DATA_TOGGLED) filter = "url(#glow-data)";
 
-              const clickable = isData && !frozen && !showingChallenger;
+              const clickable = isData && !assessmentMode && !showingChallenger;
 
               return (
                 <circle
@@ -566,12 +660,30 @@ export default function LdpcGraph() {
                   className={clickable ? "cursor-pointer" : ""}
                   style={{
                     transition: "fill 0.2s ease, filter 0.2s ease",
-                    opacity: frozen ? 0.85 : 1,
+                    opacity: assessmentMode ? 0.85 : 1,
                   }}
                   onClick={() => handleNodeClick(node)}
                 >
                   <title>{node}</title>
                 </circle>
+              );
+            })}
+
+            {/* Assessment: red rings on hidden error nodes */}
+            {assessmentMode && [...hiddenErrorNodes].map((node) => {
+              const pos = positions[node];
+              if (!pos) return null;
+              return (
+                <circle
+                  key={`err-${node}`}
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={21}
+                  fill="none"
+                  stroke="#ef4444"
+                  strokeWidth={3}
+                  opacity={0.9}
+                />
               );
             })}
           </svg>
@@ -594,7 +706,7 @@ export default function LdpcGraph() {
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">#</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Graph</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Flips</th>
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Score</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Result</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Share</th>
                     </tr>
                   </thead>
@@ -614,17 +726,13 @@ export default function LdpcGraph() {
                           </span>
                         </td>
                         <td className="px-2 py-1.5 text-right">
-                          <span
-                            className={`font-bold tabular-nums ${
-                              entry.score === 0
-                                ? "text-emerald-600"
-                                : entry.score <= 2
-                                  ? "text-yellow-600"
-                                  : "text-orange-500"
-                            }`}
-                          >
-                            {entry.score}
-                          </span>
+                          {entry.logicalError ? (
+                            <span className="font-bold text-red-500" title={`${entry.bitsFlipped} bits wrong`}>
+                              ✗
+                            </span>
+                          ) : (
+                            <span className="font-bold text-emerald-600">✓</span>
+                          )}
                         </td>
                         <td className="px-2 py-1.5 text-right">
                           <button
@@ -672,7 +780,9 @@ export default function LdpcGraph() {
               </h3>
               <p className="mb-4 text-sm text-zinc-500">
                 {entry.flips
-                  ? `You scored ${entry.score} — dare someone to beat it!`
+                  ? entry.logicalError
+                    ? "You got a logical error — dare someone to do better!"
+                    : "You decoded correctly — dare someone to match it!"
                   : "Send this puzzle to a friend"}
               </p>
               <div className="flex flex-col gap-1">
@@ -687,7 +797,7 @@ export default function LdpcGraph() {
                   {copiedIdx === idx ? <span className="font-medium text-emerald-600">Copied!</span> : "Copy link"}
                 </button>
                 <a
-                  href={`https://twitter.com/intent/tweet?text=${encodeURIComponent("I scored " + entry.score + " on this LDPC puzzle! Can you beat me?")}&url=${encodeURIComponent(makeShareUrl(entry))}`}
+                  href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(entry.logicalError ? "I got a logical error on this LDPC puzzle. Can you do better?" : "I decoded this LDPC puzzle correctly! Can you match it?")}&url=${encodeURIComponent(makeShareUrl(entry))}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
@@ -720,7 +830,7 @@ export default function LdpcGraph() {
                   LinkedIn
                 </a>
                 <a
-                  href={`mailto:?subject=${encodeURIComponent("LDPC Puzzle Challenge!")}&body=${encodeURIComponent("I scored " + entry.score + " on this LDPC puzzle! Can you beat me?\n\n" + makeShareUrl(entry))}`}
+                  href={`mailto:?subject=${encodeURIComponent("LDPC Puzzle Challenge!")}&body=${encodeURIComponent((entry.logicalError ? "I got a logical error on this LDPC puzzle. Can you do better?" : "I decoded this LDPC puzzle correctly! Can you match it?") + "\n\n" + makeShareUrl(entry))}`}
                   className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5 text-zinc-400">
