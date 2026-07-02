@@ -157,6 +157,7 @@ export default function LdpcGraph() {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [sharePopover, setSharePopover] = useState<number | null>(null);
   const [frozen, setFrozen] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [challenge, setChallenge] = useState<{ score: number; flips: string } | null>(null);
   const [showingChallenger, setShowingChallenger] = useState(false);
   const [initialColors, setInitialColors] = useState<Map<string, string>>(new Map());
@@ -257,6 +258,30 @@ export default function LdpcGraph() {
     ]);
   }, [graph, frozen, nodeColors, selectedGraphId, selectedGraphName, prob0, score, dataSeed]);
 
+  const handleEnter = useCallback(() => {
+    if (!graph || !selectedGraphId) return;
+    if (!frozen) {
+      const flips = encodeFlips(nodeColors, graph.dataNodes.length);
+      setHistory((prev) => [
+        ...prev,
+        { graphId: selectedGraphId, graphName: selectedGraphName, prob0, score, dataSeed, flips },
+      ]);
+    }
+    const p = 1 - errorProb;
+    const ds = newSeed();
+    const adj = buildAdj(graph);
+    const colors = computeColors(graph, adj, p, ds);
+    setProb0(p);
+    setDataSeed(ds);
+    setNodeColors(colors);
+    setInitialColors(colors);
+    setFrozen(false);
+    setChallenge(null);
+    setShowingChallenger(false);
+    setScanning(true);
+    setTimeout(() => setScanning(false), 350);
+  }, [graph, frozen, nodeColors, selectedGraphId, selectedGraphName, prob0, score, dataSeed, errorProb]);
+
   const handleNodeClick = useCallback(
     (node: string) => {
       if (frozen || showingChallenger) return;
@@ -311,6 +336,14 @@ export default function LdpcGraph() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [sharePopover]);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Enter") handleEnter();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleEnter]);
 
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const [svgHeight, setSvgHeight] = useState(0);
@@ -444,6 +477,15 @@ export default function LdpcGraph() {
       {/* Graph + History */}
       {graph && (
         <div ref={svgContainerRef} className="flex w-full gap-3" style={{ height: svgHeight > 0 ? svgHeight : undefined }}>
+          <div className="relative h-full flex-1 min-w-0">
+            {scanning && (
+              <div className="pointer-events-none absolute inset-0 z-10">
+                <div
+                  className="absolute inset-0 bg-pink-200/50"
+                  style={{ animation: "flash-pink 0.35s ease-out forwards" }}
+                />
+              </div>
+            )}
           <svg
             viewBox="0 0 1000 1000"
             preserveAspectRatio="xMidYMid meet"
@@ -533,6 +575,7 @@ export default function LdpcGraph() {
               );
             })}
           </svg>
+          </div>
 
           {/* History */}
           <div className="flex w-72 shrink-0 flex-col rounded-xl border border-zinc-200 bg-zinc-50">
