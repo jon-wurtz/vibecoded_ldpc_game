@@ -53,9 +53,41 @@ def make_repetition_code(n_data=7):
         "positions": normalize_positions(pos),
     }
 
+def make_graph_code(n_checks = 20, connectivity = 4):
+    G_seed:nx.Graph = nx.random_regular_graph(connectivity, n_checks)
+    
+    pos_seed = nx.kamada_kawai_layout(G_seed)
+    
+    G = nx.Graph()
+    pos = {}
+    for i, edge in enumerate(G_seed.edges()):
+        check = f"check_{i}"
+        node1 = f"data_{edge[0]}"
+        node2 = f"data_{edge[1]}"
+        G.add_node(check)
+        G.add_node(node1)
+        G.add_node(node2)
+        G.add_edge(check, node1)
+        G.add_edge(check, node2)
+        pos[node1] = pos_seed[edge[0]]
+        pos[node2] = pos_seed[edge[1]]
+        pos[check] = ((pos_seed[edge[0]][0] + pos_seed[edge[1]][0]) / 2, (pos_seed[edge[0]][1] + pos_seed[edge[1]][1]) / 2)
+    
+    data_nodes = [f"data_{i}" for i in range(n_checks)]
+    check_nodes = [f"check_{i}" for i in range(len(G_seed.edges()))]
+    
+    return {
+        "id": "graph-code",
+        "name": "Graph Code",
+        "maxErrorProb": 0.4,
+        "checkNodes": check_nodes,
+        "dataNodes": data_nodes,
+        "edges": [[a, b] for a, b in G.edges()],
+        "positions": normalize_positions(pos),
+    }
 
 if __name__ == "__main__":
-    graphs = [make_repetition_code(n_data=7)]
+    graphs = [make_repetition_code(n_data=7), make_graph_code(n_checks=10, connectivity=4)]
     for g in graphs:
         path = os.path.join(GRAPHS_DIR, f"{g['id']}.json")
         with open(path, "w") as f:
