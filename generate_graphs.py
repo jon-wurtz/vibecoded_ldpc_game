@@ -372,7 +372,7 @@ if __name__ == "__main__":
         make_repetition_code(n_data=7),
         make_hamming_code(),
         make_golay_code(),
-        make_graph_code(n_vertices=10, connectivity=4),
+        # make_graph_code(n_vertices=10, connectivity=4),
         make_levi_cage(),
     ]
     for g in graphs:
