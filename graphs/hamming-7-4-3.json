@@ -1,6 +1,6 @@
 {
   "id": "hamming-7-4-3",
-  "name": "Hamming [7,4,3]",
+  "name": "[7,4,3] Hamming",
   "maxErrors": 1,
   "checkNodes": [
     "check_0",

@@ -1,6 +1,6 @@
 {
   "id": "repetition-code",
-  "name": "Repetition Code",
+  "name": "[7,1,7] Repetition Code",
   "maxErrors": 3,
   "checkNodes": [
     "check_0",

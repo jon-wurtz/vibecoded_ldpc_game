@@ -105,7 +105,7 @@ def make_repetition_code(n_data=7):
 
     return {
         "id": "repetition-code",
-        "name": "Repetition Code",
+        "name": "[7,1,7] Repetition Code",
         "maxErrors": 3,  # distance = n_data = 7, floor((7-1)/2)
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
@@ -201,7 +201,7 @@ def make_hamming_code():
 
     return {
         "id": "hamming-7-4-3",
-        "name": "Hamming [7,4,3]",
+        "name": "[7,4,3] Hamming",
         "maxErrors": 1,  # distance = 3, floor((3-1)/2)
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
@@ -275,7 +275,7 @@ def make_golay_code():
 
     return {
         "id": "golay-23-12-7",
-        "name": "Golay [23,12,7]",
+        "name": "[23,12,7] Golay",
         "maxErrors": 3,  # distance = 7, floor((7-1)/2)
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
