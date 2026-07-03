@@ -97,10 +97,10 @@ function computeColors(
 }
 
 // Encode which data nodes the player flipped as a hex bitmask
-function encodeFlips(nodeColors: Map<string, string>, ndata: number): string {
+function encodeFlips(nodeColors: Map<string, string>, dataNodes: string[]): string {
   let bits = BigInt(0);
-  for (let i = 0; i < ndata; i++) {
-    if (nodeColors.get(`data_${i}`) === DATA_COLOR) {
+  for (let i = 0; i < dataNodes.length; i++) {
+    if (nodeColors.get(dataNodes[i]) === DATA_COLOR) {
       bits |= BigInt(1) << BigInt(i);
     }
   }
@@ -111,14 +111,15 @@ function encodeFlips(nodeColors: Map<string, string>, ndata: number): string {
 function applyFlips(
   colors: Map<string, string>,
   adj: Map<string, string[]>,
+  dataNodes: string[],
   flipsHex: string
 ): Map<string, string> {
   const bits = BigInt("0x" + flipsHex);
   const next = new Map(colors);
-  for (let i = 0; i < 64; i++) {
-    if ((bits >> BigInt(i)) & BigInt(1)) {
-      const node = `data_${i}`;
-      if (!next.has(node)) continue;
+  for (let i = 0; (bits >> BigInt(i)) > 0n; i++) {
+    if ((bits >> BigInt(i)) & 1n) {
+      const node = dataNodes[i];
+      if (!node || !next.has(node)) continue;
       const cur = next.get(node);
       next.set(node, cur === DATA_TOGGLED ? DATA_COLOR : DATA_TOGGLED);
       for (const neighbor of adj.get(node) || []) {
@@ -175,6 +176,7 @@ export default function LdpcGraph() {
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const numErrorsRef = useRef<number>(1);
+  const assessmentModeRef = useRef<boolean>(false);
 
   const adjacency = useMemo(() => {
     if (!graph) return new Map<string, string[]>();
@@ -233,6 +235,7 @@ export default function LdpcGraph() {
     const ds = params.get("ds");
     if (g && ne && ds) {
       loadGraphById(g, Number(ne), Number(ds)).then(() => {
+        window.history.replaceState({}, "", window.location.pathname);
         const f = params.get("f");
         const le = params.get("le");
         if (f && le !== null) {
@@ -241,7 +244,6 @@ export default function LdpcGraph() {
           setChallenge(null);
         }
       });
-      window.history.replaceState({}, "", window.location.pathname);
     }
   }, [loadGraphById]);
 
@@ -280,6 +282,7 @@ export default function LdpcGraph() {
     const ds = newSeed();
     const adj = buildAdj(g);
     const colors = computeColors(g, adj, ne, ds);
+    assessmentModeRef.current = false;
     setNumErrors(ne); setDataSeed(ds);
     setNodeColors(colors); setInitialColors(colors);
     setAssessmentMode(false); setHiddenErrorNodes(new Set());
@@ -308,11 +311,12 @@ export default function LdpcGraph() {
   }, [graph, numErrors]);
 
   const handleSubmit = useCallback(() => {
-    if (!graph || assessmentMode) return;
+    if (!graph || assessmentModeRef.current) return;
+    assessmentModeRef.current = true;
     const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
     const errorSet = pickErrorSet(graph, numErrors, dataSeed);
     const errorNodes = new Set<string>(graph.dataNodes.filter((_, i) => errorSet.has(i)));
-    const flips = encodeFlips(nodeColors, graph.dataNodes.length);
+    const flips = encodeFlips(nodeColors, graph.dataNodes);
     setHistory((prev) => [
       ...prev,
       { graphId: selectedGraphId, graphName: selectedGraphName, numErrors, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
@@ -330,12 +334,13 @@ export default function LdpcGraph() {
   const handleEnter = useCallback(() => {
     if (!graph || !selectedGraphId) return;
 
-    if (!assessmentMode) {
+    if (!assessmentModeRef.current) {
+      assessmentModeRef.current = true;
       // Phase 1: evaluate and enter assessment mode
       const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
       const errorSet = pickErrorSet(graph, numErrors, dataSeed);
       const errorNodes = new Set<string>(graph.dataNodes.filter((_, i) => errorSet.has(i)));
-      const flips = encodeFlips(nodeColors, graph.dataNodes.length);
+      const flips = encodeFlips(nodeColors, graph.dataNodes);
       setHistory((prev) => [
         ...prev,
         { graphId: selectedGraphId, graphName: selectedGraphName, numErrors, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
@@ -389,7 +394,7 @@ export default function LdpcGraph() {
       setNodeColors(initialColors);
       setShowingChallenger(false);
     } else {
-      const solved = applyFlips(initialColors, adjacency, challenge.flips);
+      const solved = applyFlips(initialColors, adjacency, graph.dataNodes, challenge.flips);
       setNodeColors(solved);
       setShowingChallenger(true);
     }
