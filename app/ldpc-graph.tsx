@@ -11,6 +11,11 @@ interface Graph {
 interface GraphMeta {
   id: string;
   name: string;
+  logicalBits: number;
+  checkNodes: string[];
+  dataNodes: string[];
+  edges: [string, string][];
+  positions: Record<string, { x: number; y: number }>;
 }
 
 interface GraphData {
@@ -116,8 +121,8 @@ function applyFlips(
 ): Map<string, string> {
   const bits = BigInt("0x" + flipsHex);
   const next = new Map(colors);
-  for (let i = 0; (bits >> BigInt(i)) > 0n; i++) {
-    if ((bits >> BigInt(i)) & 1n) {
+  for (let i = 0; (bits >> BigInt(i)) > BigInt(0); i++) {
+    if ((bits >> BigInt(i)) & BigInt(1)) {
       const node = dataNodes[i];
       if (!node || !next.has(node)) continue;
       const cur = next.get(node);
@@ -210,6 +215,7 @@ export default function LdpcGraph() {
       setDataSeed(ds);
       setNodeColors(colors);
       setInitialColors(colors);
+      assessmentModeRef.current = false;
       setAssessmentMode(false);
       setHiddenErrorNodes(new Set());
       setShowingChallenger(false);
@@ -300,6 +306,7 @@ export default function LdpcGraph() {
     const ds = newSeed();
     const adj = buildAdj(graph);
     const colors = computeColors(graph, adj, numErrors, ds);
+    assessmentModeRef.current = false;
     setDataSeed(ds);
     setNodeColors(colors);
     setInitialColors(colors);
@@ -438,138 +445,182 @@ export default function LdpcGraph() {
     };
   }, []);
 
-  const svgContainerRef = useRef<HTMLDivElement>(null);
-  const [svgHeight, setSvgHeight] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerHeight, setContainerHeight] = useState(0);
 
   useEffect(() => {
     function measure() {
-      if (svgContainerRef.current) {
-        const top = svgContainerRef.current.getBoundingClientRect().top;
-        setSvgHeight(window.innerHeight - top - 8);
+      if (containerRef.current) {
+        const top = containerRef.current.getBoundingClientRect().top;
+        setContainerHeight(window.innerHeight - top - 8);
       }
     }
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [graph]);
+  }, []);
 
   return (
-    <div className="flex w-full flex-1 flex-col items-center gap-3 overflow-hidden">
-      {/* Challenge banner */}
-      {challenge && (
-        <div className="flex items-center gap-4 rounded-xl border border-orange-500/20 bg-orange-500/[0.06] px-5 py-2 text-sm">
-          <span className="font-semibold text-orange-600">
-            Challenge: someone got {challenge.logicalError ? "a logical error" : "success"}
-          </span>
-          <span className="text-zinc-500">{challenge.logicalError ? "Can you do better?" : "Can you match it?"}</span>
-          <button
-            onClick={toggleChallengerView}
-            className="rounded-lg border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
-          >
-            {showingChallenger ? "Hide solution" : "Show solution"}
-          </button>
-        </div>
-      )}
+    <div
+      ref={containerRef}
+      className="flex w-full gap-3 overflow-hidden"
+      style={{ height: containerHeight > 0 ? containerHeight : undefined }}
+    >
 
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-4">
-        {/* Graph selector */}
-        <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
-          <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">Graph</span>
-          <select
-            value={selectedGraphId}
-            onChange={(e) => setSelectedGraphId(e.target.value)}
-            className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-700 shadow-sm"
-          >
-            <option value="" disabled>Select a graph…</option>
-            {graphList.map((gm) => (
-              <option key={gm.id} value={gm.id}>{gm.name}</option>
-            ))}
-          </select>
-          <button
-            onClick={() => {
-              if (!selectedGraphId) return;
-              loadGraphById(selectedGraphId, numErrors, newSeed());
-            }}
-            disabled={!selectedGraphId}
-            className="rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
-          >
-            New Game
-          </button>
-        </div>
-
-        {/* Error count + Randomize */}
-        <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
-          <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">Errors</span>
-          <button
-            onClick={() => setNumErrors((n) => Math.max(1, n - 1))}
-            disabled={!graph || numErrors <= 1}
-            className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-sm font-bold text-zinc-600 shadow-sm transition-all hover:bg-zinc-100 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
-          >−</button>
-          <span className="min-w-[3.5rem] text-center text-sm tabular-nums text-zinc-700">
-            {graph ? `${numErrors} / ${maxErrors}` : "—"}
-          </span>
-          <button
-            onClick={() => setNumErrors((n) => Math.min(maxErrors, n + 1))}
-            disabled={!graph || numErrors >= maxErrors}
-            className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-sm font-bold text-zinc-600 shadow-sm transition-all hover:bg-zinc-100 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
-          >+</button>
-          <button
-            onClick={handleRandomize}
-            disabled={!graph}
-            className="rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
-          >
-            Randomize
-          </button>
-        </div>
-
-        {/* Submit */}
-        {graph && (
-          <button
-            onClick={handleSubmit}
-            disabled={assessmentMode}
-            className={`rounded-lg px-5 py-1.5 text-sm font-semibold shadow-md transition-all active:scale-95 ${
-              assessmentMode
-                ? "border border-zinc-300 bg-zinc-100 text-zinc-400 shadow-none cursor-default"
-                : "bg-emerald-600 text-white shadow-emerald-500/20 hover:bg-emerald-500 hover:shadow-emerald-500/30"
-            }`}
-          >
-            Submit Score
-          </button>
+      {/* Left sidebar: graph picker */}
+      <div className="flex w-28 shrink-0 flex-col gap-1.5 overflow-y-auto pb-2">
+        {graphList.length === 0 ? (
+          <div className="px-2 py-6 text-center text-xs text-zinc-400">Loading…</div>
+        ) : (
+          graphList.map((gm) => {
+            const isSelected = gm.id === selectedGraphId;
+            const checkSet = new Set(gm.checkNodes);
+            return (
+              <button
+                key={gm.id}
+                onClick={() => loadGraphById(gm.id, numErrors, newSeed())}
+                className={`group flex flex-col items-center rounded-xl border p-2 transition-all hover:shadow-sm ${
+                  isSelected
+                    ? "border-violet-400 bg-violet-50"
+                    : "border-zinc-200 bg-zinc-50 hover:border-zinc-300 hover:bg-white"
+                }`}
+              >
+                <svg
+                  viewBox="0 0 1000 1000"
+                  preserveAspectRatio="xMidYMid meet"
+                  className="w-full aspect-square"
+                >
+                  {gm.edges.map(([a, b], i) => {
+                    const pa = gm.positions[a];
+                    const pb = gm.positions[b];
+                    if (!pa || !pb) return null;
+                    return (
+                      <line
+                        key={i}
+                        x1={pa.x} y1={pa.y}
+                        x2={pb.x} y2={pb.y}
+                        stroke={isSelected ? "#7c3aed" : "#374151"}
+                        strokeWidth={6}
+                        opacity={0.25}
+                      />
+                    );
+                  })}
+                  {[...gm.checkNodes, ...gm.dataNodes].map((node) => {
+                    const pos = gm.positions[node];
+                    if (!pos) return null;
+                    const isCheck = checkSet.has(node);
+                    return (
+                      <circle
+                        key={node}
+                        cx={pos.x}
+                        cy={pos.y}
+                        r={isCheck ? 22 : 28}
+                        fill={isCheck ? CHECK_COLOR : DATA_TOGGLED}
+                        opacity={isSelected ? 1 : 0.8}
+                      />
+                    );
+                  })}
+                </svg>
+                <span className={`mt-1.5 text-center text-xs font-medium leading-tight ${
+                  isSelected ? "text-violet-700" : "text-zinc-600 group-hover:text-zinc-800"
+                }`}>
+                  {gm.name}
+                </span>
+              </button>
+            );
+          })
         )}
       </div>
 
-      {/* Legend + Score */}
-      {graph && (
-        <div className="flex items-center gap-6 text-xs text-zinc-500">
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#670EFF] shadow-[0_0_6px_#670EFF]" />
-            <span className="text-zinc-400">Check</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#475569]" />
-            <span className="text-zinc-400">Data</span>
-          </span>
-          <span className="text-zinc-600">
-            {assessmentMode
-              ? (assessmentSuccess ? "Correct! Next challenge loading…" : "Press Enter for next challenge")
-              : showingChallenger
-                ? "Viewing challenger's solution"
-                : "Click a data node to toggle parity"}
-          </span>
-          <span className="ml-auto flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1">
-            <span className="text-zinc-500 uppercase tracking-wide">Logical Errors</span>
-            <span className={`text-lg font-bold tabular-nums ${logicalErrors === 0 ? "text-emerald-600" : "text-red-500"}`}>
-              {logicalErrors}
-            </span>
-          </span>
-        </div>
-      )}
+      {/* Center: main content */}
+      <div className="flex flex-1 flex-col min-w-0 gap-2 overflow-hidden">
 
-      {/* Graph + History */}
-      {graph && (
-        <div ref={svgContainerRef} className="flex w-full gap-3" style={{ height: svgHeight > 0 ? svgHeight : undefined }}>
-          <div className="relative h-full flex-1 min-w-0">
+        {/* Challenge banner */}
+        {challenge && (
+          <div className="flex items-center gap-4 rounded-xl border border-orange-500/20 bg-orange-500/[0.06] px-5 py-2 text-sm">
+            <span className="font-semibold text-orange-600">
+              Challenge: someone got {challenge.logicalError ? "a logical error" : "success"}
+            </span>
+            <span className="text-zinc-500">{challenge.logicalError ? "Can you do better?" : "Can you match it?"}</span>
+            <button
+              onClick={toggleChallengerView}
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
+            >
+              {showingChallenger ? "Hide solution" : "Show solution"}
+            </button>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
+            <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">Errors</span>
+            <button
+              onClick={() => setNumErrors((n) => Math.max(1, n - 1))}
+              disabled={!graph || numErrors <= 1}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-sm font-bold text-zinc-600 shadow-sm transition-all hover:bg-zinc-100 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
+            >−</button>
+            <span className="min-w-[3.5rem] text-center text-sm tabular-nums text-zinc-700">
+              {graph ? `${numErrors} / ${maxErrors}` : "—"}
+            </span>
+            <button
+              onClick={() => setNumErrors((n) => Math.min(maxErrors, n + 1))}
+              disabled={!graph || numErrors >= maxErrors}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-sm font-bold text-zinc-600 shadow-sm transition-all hover:bg-zinc-100 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
+            >+</button>
+            <button
+              onClick={handleRandomize}
+              disabled={!graph}
+              className="rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Randomize
+            </button>
+          </div>
+          {graph && (
+            <button
+              onClick={handleSubmit}
+              disabled={assessmentMode}
+              className={`rounded-lg px-5 py-1.5 text-sm font-semibold shadow-md transition-all active:scale-95 ${
+                assessmentMode
+                  ? "border border-zinc-300 bg-zinc-100 text-zinc-400 shadow-none cursor-default"
+                  : "bg-emerald-600 text-white shadow-emerald-500/20 hover:bg-emerald-500 hover:shadow-emerald-500/30"
+              }`}
+            >
+              Submit Score
+            </button>
+          )}
+        </div>
+
+        {/* Legend + Score */}
+        {graph && (
+          <div className="flex items-center gap-6 text-xs text-zinc-500">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#670EFF] shadow-[0_0_6px_#670EFF]" />
+              <span className="text-zinc-400">Check</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#475569]" />
+              <span className="text-zinc-400">Data</span>
+            </span>
+            <span className="text-zinc-600">
+              {assessmentMode
+                ? (assessmentSuccess ? "Correct! Next challenge loading…" : "Press Enter for next challenge")
+                : showingChallenger
+                  ? "Viewing challenger's solution"
+                  : "Click a data node to toggle parity"}
+            </span>
+            <span className="ml-auto flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1">
+              <span className="text-zinc-500 uppercase tracking-wide">Logical Errors</span>
+              <span className={`text-lg font-bold tabular-nums ${logicalErrors === 0 ? "text-emerald-600" : "text-red-500"}`}>
+                {logicalErrors}
+              </span>
+            </span>
+          </div>
+        )}
+
+        {/* Main graph SVG */}
+        {graph ? (
+          <div className="relative flex-1 min-h-0">
             {assessmentMode && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
                 <div className={`absolute inset-0 ${assessmentSuccess ? "bg-green-300/35" : "bg-red-300/35"}`} />
@@ -580,187 +631,189 @@ export default function LdpcGraph() {
                 )}
               </div>
             )}
-          <svg
-            viewBox="0 0 1000 1000"
-            preserveAspectRatio="xMidYMid meet"
-            className="h-full w-full bg-white"
-          >
-            <defs>
-              <filter id="glow-check" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="4" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
-              <filter id="glow-orange" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="5" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
-              <filter id="glow-data" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="2" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
-            </defs>
+            <svg
+              viewBox="0 0 1000 1000"
+              preserveAspectRatio="xMidYMid meet"
+              className="h-full w-full bg-white"
+            >
+              <defs>
+                <filter id="glow-check" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <filter id="glow-orange" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="5" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <filter id="glow-data" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="2" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
 
-            {/* Edges */}
-            {graph.edges.map(([a, b], i) => {
-              const pa = positions[a];
-              const pb = positions[b];
-              if (!pa || !pb) return null;
-              // During assessment: check nodes show their original (pre-correction) state
-              const colA = (assessmentMode && !a.startsWith("data_") ? initialColors : nodeColors).get(a);
-              const colB = (assessmentMode && !b.startsWith("data_") ? initialColors : nodeColors).get(b);
-              const aOrange = colA === CHECK_TOGGLED;
-              const bOrange = colB === CHECK_TOGGLED;
-              const highlighted = aOrange || bOrange;
-              return (
-                <line
-                  key={i}
-                  x1={pa.x}
-                  y1={pa.y}
-                  x2={pb.x}
-                  y2={pb.y}
-                  stroke={highlighted ? "#f97316" : "#374151"}
-                  strokeWidth={highlighted ? 2.5 : 1}
-                  opacity={highlighted ? 0.8 : 0.5}
-                />
-              );
-            })}
+              {/* Edges */}
+              {graph.edges.map(([a, b], i) => {
+                const pa = positions[a];
+                const pb = positions[b];
+                if (!pa || !pb) return null;
+                const colA = (assessmentMode && !a.startsWith("data_") ? initialColors : nodeColors).get(a);
+                const colB = (assessmentMode && !b.startsWith("data_") ? initialColors : nodeColors).get(b);
+                const aOrange = colA === CHECK_TOGGLED;
+                const bOrange = colB === CHECK_TOGGLED;
+                const highlighted = aOrange || bOrange;
+                return (
+                  <line
+                    key={i}
+                    x1={pa.x}
+                    y1={pa.y}
+                    x2={pb.x}
+                    y2={pb.y}
+                    stroke={highlighted ? "#f97316" : "#374151"}
+                    strokeWidth={highlighted ? 2.5 : 1}
+                    opacity={highlighted ? 0.8 : 0.5}
+                  />
+                );
+              })}
 
-            {/* Nodes */}
-            {[...graph.checkNodes, ...graph.dataNodes].map((node) => {
-              const pos = positions[node];
-              if (!pos) return null;
-              const isData = node.startsWith("data_");
-              // During assessment: check nodes revert to initial state (original parity violations)
-              const colorMap = assessmentMode && !isData ? initialColors : nodeColors;
-              const color = colorMap.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
-              const isOrange = color === CHECK_TOGGLED;
-              const radius = isData ? 14 : 11;
+              {/* Nodes */}
+              {[...graph.checkNodes, ...graph.dataNodes].map((node) => {
+                const pos = positions[node];
+                if (!pos) return null;
+                const isData = node.startsWith("data_");
+                const colorMap = assessmentMode && !isData ? initialColors : nodeColors;
+                const color = colorMap.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
+                const isOrange = color === CHECK_TOGGLED;
+                const radius = isData ? 14 : 11;
 
-              let filter: string | undefined;
-              if (isOrange) filter = "url(#glow-orange)";
-              else if (!isData) filter = "url(#glow-check)";
-              else if (color === DATA_TOGGLED) filter = "url(#glow-data)";
+                let filter: string | undefined;
+                if (isOrange) filter = "url(#glow-orange)";
+                else if (!isData) filter = "url(#glow-check)";
+                else if (color === DATA_TOGGLED) filter = "url(#glow-data)";
 
-              const clickable = isData && !assessmentMode && !showingChallenger;
+                const clickable = isData && !assessmentMode && !showingChallenger;
 
-              return (
-                <circle
-                  key={node}
-                  cx={pos.x}
-                  cy={pos.y}
-                  r={radius}
-                  fill={color}
-                  stroke={isData ? "transparent" : "rgba(0,0,0,0.08)"}
-                  strokeWidth={1.5}
-                  filter={filter}
-                  className={clickable ? "cursor-pointer" : ""}
-                  style={{
-                    transition: "fill 0.2s ease, filter 0.2s ease",
-                    opacity: assessmentMode ? 0.85 : 1,
-                  }}
-                  onClick={() => handleNodeClick(node)}
-                >
-                  <title>{node}</title>
-                </circle>
-              );
-            })}
+                return (
+                  <circle
+                    key={node}
+                    cx={pos.x}
+                    cy={pos.y}
+                    r={radius}
+                    fill={color}
+                    stroke={isData ? "transparent" : "rgba(0,0,0,0.08)"}
+                    strokeWidth={1.5}
+                    filter={filter}
+                    className={clickable ? "cursor-pointer" : ""}
+                    style={{
+                      transition: "fill 0.2s ease, filter 0.2s ease",
+                      opacity: assessmentMode ? 0.85 : 1,
+                    }}
+                    onClick={() => handleNodeClick(node)}
+                  >
+                    <title>{node}</title>
+                  </circle>
+                );
+              })}
 
-            {/* Assessment: red rings on hidden error nodes */}
-            {assessmentMode && [...hiddenErrorNodes].map((node) => {
-              const pos = positions[node];
-              if (!pos) return null;
-              return (
-                <circle
-                  key={`err-${node}`}
-                  cx={pos.x}
-                  cy={pos.y}
-                  r={21}
-                  fill="none"
-                  stroke="#ef4444"
-                  strokeWidth={3}
-                  opacity={0.9}
-                />
-              );
-            })}
-          </svg>
+              {/* Assessment: red rings on hidden error nodes */}
+              {assessmentMode && [...hiddenErrorNodes].map((node) => {
+                const pos = positions[node];
+                if (!pos) return null;
+                return (
+                  <circle
+                    key={`err-${node}`}
+                    cx={pos.x}
+                    cy={pos.y}
+                    r={21}
+                    fill="none"
+                    stroke="#ef4444"
+                    strokeWidth={3}
+                    opacity={0.9}
+                  />
+                );
+              })}
+            </svg>
           </div>
-
-          {/* History */}
-          <div className="flex w-72 shrink-0 flex-col rounded-xl border border-zinc-200 bg-zinc-50">
-            <div className="border-b border-zinc-200 px-4 py-2.5">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">History</h2>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {history.length === 0 ? (
-                <p className="px-4 py-6 text-center text-xs text-zinc-600">
-                  Press Randomize to start
-                </p>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-zinc-500">
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">#</th>
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Graph</th>
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Errors</th>
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Result</th>
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Share</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.map((entry, i) => (
-                      <tr
-                        key={i}
-                        className="border-t border-zinc-100 transition-colors hover:bg-zinc-100"
-                      >
-                        <td className="px-2 py-1.5 tabular-nums text-zinc-500">{i + 1}</td>
-                        <td className="px-2 py-1.5">
-                          <span className="font-semibold text-zinc-600">{entry.graphName}</span>
-                        </td>
-                        <td className="px-2 py-1.5 tabular-nums text-zinc-600">
-                          {entry.numErrors}
-                        </td>
-                        <td className="px-2 py-1.5 text-right">
-                          {entry.logicalError ? (
-                            <span className="font-bold text-red-500" title={`${entry.bitsFlipped} bits wrong`}>
-                              ✗
-                            </span>
-                          ) : (
-                            <span className="font-bold text-emerald-600">✓</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5 text-right">
-                          <button
-                            onClick={() => setSharePopover(sharePopover === i ? null : i)}
-                            className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all active:scale-95 ${
-                              entry.flips
-                                ? "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
-                                : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
-                            }`}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
-                              <path d="M13 4.5a2.5 2.5 0 1 1 .702 1.737L6.97 9.604a2.5 2.5 0 0 1 0 .792l6.733 3.367a2.5 2.5 0 1 1-.671 1.341l-6.733-3.367a2.5 2.5 0 1 1 0-3.474l6.733-3.367A2.5 2.5 0 0 1 13 4.5Z" />
-                            </svg>
-                            {entry.flips ? "Challenge" : "Share"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
+            Select a code on the left to start
           </div>
+        )}
+      </div>
+
+      {/* Right: History (always visible) */}
+      <div className="flex w-64 shrink-0 flex-col rounded-xl border border-zinc-200 bg-zinc-50">
+        <div className="border-b border-zinc-200 px-4 py-2.5">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">History</h2>
         </div>
-      )}
+        <div className="flex-1 overflow-y-auto">
+          {history.length === 0 ? (
+            <p className="px-4 py-6 text-center text-xs text-zinc-600">
+              Select a code to start
+            </p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-zinc-500">
+                  <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">#</th>
+                  <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Graph</th>
+                  <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Errors</th>
+                  <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Result</th>
+                  <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((entry, i) => (
+                  <tr
+                    key={i}
+                    className="border-t border-zinc-100 transition-colors hover:bg-zinc-100"
+                  >
+                    <td className="px-2 py-1.5 tabular-nums text-zinc-500">{i + 1}</td>
+                    <td className="px-2 py-1.5">
+                      <span className="font-semibold text-zinc-600">{entry.graphName}</span>
+                    </td>
+                    <td className="px-2 py-1.5 tabular-nums text-zinc-600">
+                      {entry.numErrors}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      {entry.logicalError ? (
+                        <span className="font-bold text-red-500" title={`${entry.bitsFlipped} bits wrong`}>
+                          ✗
+                        </span>
+                      ) : (
+                        <span className="font-bold text-emerald-600">✓</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      <button
+                        onClick={() => setSharePopover(sharePopover === i ? null : i)}
+                        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all active:scale-95 ${
+                          entry.flips
+                            ? "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                            : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
+                        }`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                          <path d="M13 4.5a2.5 2.5 0 1 1 .702 1.737L6.97 9.604a2.5 2.5 0 0 1 0 .792l6.733 3.367a2.5 2.5 0 1 1-.671 1.341l-6.733-3.367a2.5 2.5 0 1 1 0-3.474l6.733-3.367A2.5 2.5 0 0 1 13 4.5Z" />
+                        </svg>
+                        {entry.flips ? "Challenge" : "Share"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
 
       {/* Share modal */}
       {sharePopover !== null && history[sharePopover] && (() => {
