@@ -346,7 +346,7 @@ def make_levi_cage():
 
     return {
         "id": "levi-cage",
-        "name": "[30,15,3] Levi Cage graph code",
+        "name": "[30,16,8] Levi Graph",
         "maxErrors": 4,
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,

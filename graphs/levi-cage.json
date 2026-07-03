@@ -1,6 +1,6 @@
 {
   "id": "levi-cage",
-  "name": "[30,15,3] Levi Cage graph code",
+  "name": "[30,16,3] Levi Cage graph code",
   "maxErrors": 4,
   "checkNodes": [
     "check_0",
