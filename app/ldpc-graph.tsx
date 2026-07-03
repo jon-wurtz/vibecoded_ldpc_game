@@ -258,7 +258,7 @@ export default function LdpcGraph() {
     colors: Map<string, string>
   ): { isLogicalError: boolean; bitsFlipped: number } {
     const errorSet = pickErrorSet(g, ne, seed);
-    const hidden = g.dataNodes.map((_, i) => (errorSet.has(i) ? 0 : 1));
+    const hidden = g.dataNodes.map((_, i) => (errorSet.has(i) ? 1 : 0));
     const userFlip = g.dataNodes.map((n) => (colors.get(n) === DATA_COLOR ? 1 : 0));
     const residual = hidden.map((e, i) => e ^ userFlip[i]);
     const isLogicalError =
