@@ -16,7 +16,7 @@ interface GraphMeta {
 interface GraphData {
   id: string;
   name: string;
-  maxErrorProb: number;
+  maxErrors: number;
   checkNodes: string[];
   dataNodes: string[];
   edges: [string, string][];
@@ -28,7 +28,7 @@ interface GraphData {
 interface HistoryEntry {
   graphId: string;
   graphName: string;
-  prob0: number;
+  numErrors: number;
   logicalError: boolean;
   bitsFlipped: number;
   dataSeed: number;
@@ -60,16 +60,27 @@ function buildAdj(g: Graph): Map<string, string[]> {
   return adj;
 }
 
+function pickErrorSet(g: Graph, numErrors: number, dataSeed: number): Set<number> {
+  const rand = mulberry32(dataSeed);
+  const n = g.dataNodes.length;
+  const indices = Array.from({ length: n }, (_, i) => i);
+  for (let i = 0; i < numErrors; i++) {
+    const j = i + Math.floor(rand() * (n - i));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  return new Set(indices.slice(0, numErrors));
+}
+
 function computeColors(
   g: Graph,
   adj: Map<string, string[]>,
-  prob0: number,
+  numErrors: number,
   dataSeed: number
 ): Map<string, string> {
-  const rand = mulberry32(dataSeed);
+  const errorSet = pickErrorSet(g, numErrors, dataSeed);
   const dataState = new Map<string, number>();
-  for (const node of g.dataNodes) {
-    dataState.set(node, rand() < prob0 ? 0 : 1);
+  for (let i = 0; i < g.dataNodes.length; i++) {
+    dataState.set(g.dataNodes[i], errorSet.has(i) ? 0 : 1);
   }
 
   const colors = new Map<string, string>();
@@ -120,16 +131,10 @@ function applyFlips(
   return next;
 }
 
-function getFlipDifficulty(prob0: number): { label: string; color: string } {
-  if (prob0 >= 0.97) return { label: "Easy", color: "text-emerald-600" };
-  if (prob0 >= 0.95) return { label: "Medium", color: "text-amber-500" };
-  return { label: "Hard", color: "text-red-600" };
-}
-
 function makeShareUrl(entry: HistoryEntry): string {
   const obj: Record<string, string> = {
     g: entry.graphId,
-    p: String(entry.prob0),
+    ne: String(entry.numErrors),
     ds: String(entry.dataSeed),
   };
   if (entry.flips) {
@@ -149,9 +154,8 @@ export default function LdpcGraph() {
   const [graphList, setGraphList] = useState<GraphMeta[]>([]);
   const [selectedGraphId, setSelectedGraphId] = useState<string>("");
   const [selectedGraphName, setSelectedGraphName] = useState<string>("");
-  const [maxErrorProb, setMaxErrorProb] = useState(0.4);
-  const [errorProb, setErrorProb] = useState(0.1);
-  const [prob0, setProb0] = useState(0.9);
+  const [maxErrors, setMaxErrors] = useState(1);
+  const [numErrors, setNumErrors] = useState(1);
   const [graph, setGraph] = useState<Graph | null>(null);
   const [matG, setMatG] = useState<number[][]>([]);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -170,7 +174,7 @@ export default function LdpcGraph() {
   const lastChallengeTimeRef = useRef<number>(0);
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const graphRef = useRef<Graph | null>(null);
-  const errorProbRef = useRef<number>(0.1);
+  const numErrorsRef = useRef<number>(1);
 
   const adjacency = useMemo(() => {
     if (!graph) return new Map<string, string[]>();
@@ -178,7 +182,7 @@ export default function LdpcGraph() {
   }, [graph]);
 
   const loadGraphById = useCallback(
-    async (graphId: string, p: number, ds: number) => {
+    async (graphId: string, ne: number, ds: number) => {
       if (advanceTimerRef.current !== null) {
         clearTimeout(advanceTimerRef.current);
         advanceTimerRef.current = null;
@@ -191,16 +195,16 @@ export default function LdpcGraph() {
         dataNodes: gd.dataNodes,
         edges: gd.edges,
       };
+      const clampedNe = Math.min(Math.max(ne, 1), gd.maxErrors);
       const adj = buildAdj(g);
-      const colors = computeColors(g, adj, p, ds);
+      const colors = computeColors(g, adj, clampedNe, ds);
       setSelectedGraphId(graphId);
       setSelectedGraphName(gd.name);
-      setMaxErrorProb(gd.maxErrorProb);
-      setErrorProb(1 - p);
+      setMaxErrors(gd.maxErrors);
+      setNumErrors(clampedNe);
       setGraph(g);
       setMatG(gd.G);
       setPositions(gd.positions);
-      setProb0(p);
       setDataSeed(ds);
       setNodeColors(colors);
       setInitialColors(colors);
@@ -225,10 +229,10 @@ export default function LdpcGraph() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const g = params.get("g");
-    const p = params.get("p");
+    const ne = params.get("ne");
     const ds = params.get("ds");
-    if (g && p && ds) {
-      loadGraphById(g, Number(p), Number(ds)).then(() => {
+    if (g && ne && ds) {
+      loadGraphById(g, Number(ne), Number(ds)).then(() => {
         const f = params.get("f");
         const le = params.get("le");
         if (f && le !== null) {
@@ -249,12 +253,12 @@ export default function LdpcGraph() {
   function evalLogicalError(
     g: Graph,
     gMat: number[][],
-    p0: number,
+    ne: number,
     seed: number,
     colors: Map<string, string>
   ): { isLogicalError: boolean; bitsFlipped: number } {
-    const rand = mulberry32(seed);
-    const hidden = g.dataNodes.map(() => (rand() < p0 ? 0 : 1));
+    const errorSet = pickErrorSet(g, ne, seed);
+    const hidden = g.dataNodes.map((_, i) => (errorSet.has(i) ? 0 : 1));
     const userFlip = g.dataNodes.map((n) => (colors.get(n) === DATA_COLOR ? 1 : 0));
     const residual = hidden.map((e, i) => e ^ userFlip[i]);
     const isLogicalError =
@@ -266,17 +270,17 @@ export default function LdpcGraph() {
 
   // Keep refs in sync so timer callbacks always see latest values
   useEffect(() => { graphRef.current = graph; }, [graph]);
-  useEffect(() => { errorProbRef.current = errorProb; }, [errorProb]);
+  useEffect(() => { numErrorsRef.current = numErrors; }, [numErrors]);
 
   // Stable callback — uses refs, so no deps needed
   const doAdvance = useCallback(() => {
     const g = graphRef.current;
     if (!g) return;
-    const p = 1 - errorProbRef.current;
+    const ne = numErrorsRef.current;
     const ds = newSeed();
     const adj = buildAdj(g);
-    const colors = computeColors(g, adj, p, ds);
-    setProb0(p); setDataSeed(ds);
+    const colors = computeColors(g, adj, ne, ds);
+    setNumErrors(ne); setDataSeed(ds);
     setNodeColors(colors); setInitialColors(colors);
     setAssessmentMode(false); setHiddenErrorNodes(new Set());
     setChallenge(null); setShowingChallenger(false);
@@ -290,11 +294,9 @@ export default function LdpcGraph() {
       clearTimeout(advanceTimerRef.current);
       advanceTimerRef.current = null;
     }
-    const p = 1 - errorProb;
     const ds = newSeed();
     const adj = buildAdj(graph);
-    const colors = computeColors(graph, adj, p, ds);
-    setProb0(p);
+    const colors = computeColors(graph, adj, numErrors, ds);
     setDataSeed(ds);
     setNodeColors(colors);
     setInitialColors(colors);
@@ -303,18 +305,17 @@ export default function LdpcGraph() {
     setChallenge(null);
     setShowingChallenger(false);
     lastChallengeTimeRef.current = Date.now();
-  }, [graph, errorProb]);
+  }, [graph, numErrors]);
 
   const handleSubmit = useCallback(() => {
     if (!graph || assessmentMode) return;
-    const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, prob0, dataSeed, nodeColors);
-    const rand = mulberry32(dataSeed);
-    const errorNodes = new Set<string>();
-    for (const node of graph.dataNodes) if (rand() >= prob0) errorNodes.add(node);
+    const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
+    const errorSet = pickErrorSet(graph, numErrors, dataSeed);
+    const errorNodes = new Set<string>(graph.dataNodes.filter((_, i) => errorSet.has(i)));
     const flips = encodeFlips(nodeColors, graph.dataNodes.length);
     setHistory((prev) => [
       ...prev,
-      { graphId: selectedGraphId, graphName: selectedGraphName, prob0, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
+      { graphId: selectedGraphId, graphName: selectedGraphName, numErrors, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
     ]);
     setAssessmentMode(true);
     setAssessmentSuccess(!isLogicalError);
@@ -324,21 +325,20 @@ export default function LdpcGraph() {
       const elapsed = Date.now() - lastChallengeTimeRef.current;
       advanceTimerRef.current = setTimeout(doAdvance, Math.max(250, 2000 - elapsed));
     }
-  }, [graph, assessmentMode, matG, prob0, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
+  }, [graph, assessmentMode, matG, numErrors, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
 
   const handleEnter = useCallback(() => {
     if (!graph || !selectedGraphId) return;
 
     if (!assessmentMode) {
       // Phase 1: evaluate and enter assessment mode
-      const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, prob0, dataSeed, nodeColors);
-      const rand = mulberry32(dataSeed);
-      const errorNodes = new Set<string>();
-      for (const node of graph.dataNodes) if (rand() >= prob0) errorNodes.add(node);
+      const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
+      const errorSet = pickErrorSet(graph, numErrors, dataSeed);
+      const errorNodes = new Set<string>(graph.dataNodes.filter((_, i) => errorSet.has(i)));
       const flips = encodeFlips(nodeColors, graph.dataNodes.length);
       setHistory((prev) => [
         ...prev,
-        { graphId: selectedGraphId, graphName: selectedGraphName, prob0, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
+        { graphId: selectedGraphId, graphName: selectedGraphName, numErrors, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
       ]);
       setAssessmentMode(true);
       setAssessmentSuccess(!isLogicalError);
@@ -362,7 +362,7 @@ export default function LdpcGraph() {
         doAdvance();
       }
     }
-  }, [graph, assessmentMode, matG, prob0, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
+  }, [graph, assessmentMode, matG, numErrors, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
 
   const handleNodeClick = useCallback(
     (node: string) => {
@@ -484,7 +484,7 @@ export default function LdpcGraph() {
           <button
             onClick={() => {
               if (!selectedGraphId) return;
-              loadGraphById(selectedGraphId, prob0, newSeed());
+              loadGraphById(selectedGraphId, numErrors, newSeed());
             }}
             disabled={!selectedGraphId}
             className="rounded-lg bg-violet-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-violet-500 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
@@ -493,22 +493,22 @@ export default function LdpcGraph() {
           </button>
         </div>
 
-        {/* Randomize */}
+        {/* Error count + Randomize */}
         <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5 shadow-sm">
-          <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">Error rate</span>
-          <input
-            type="range"
-            min={0}
-            max={maxErrorProb}
-            step={0.01}
-            value={errorProb}
-            disabled={!graph}
-            onChange={(e) => setErrorProb(Number(e.target.value))}
-            className="w-32 accent-violet-600 disabled:opacity-40"
-          />
-          <span className="w-10 text-right text-sm tabular-nums text-zinc-600">
-            {Math.round(errorProb * 100)}%
+          <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">Errors</span>
+          <button
+            onClick={() => setNumErrors((n) => Math.max(1, n - 1))}
+            disabled={!graph || numErrors <= 1}
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-sm font-bold text-zinc-600 shadow-sm transition-all hover:bg-zinc-100 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
+          >−</button>
+          <span className="min-w-[3.5rem] text-center text-sm tabular-nums text-zinc-700">
+            {graph ? `${numErrors} / ${maxErrors}` : "—"}
           </span>
+          <button
+            onClick={() => setNumErrors((n) => Math.min(maxErrors, n + 1))}
+            disabled={!graph || numErrors >= maxErrors}
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 bg-white text-sm font-bold text-zinc-600 shadow-sm transition-all hover:bg-zinc-100 active:scale-95 disabled:opacity-30 disabled:pointer-events-none"
+          >+</button>
           <button
             onClick={handleRandomize}
             disabled={!graph}
@@ -705,7 +705,7 @@ export default function LdpcGraph() {
                     <tr className="text-left text-zinc-500">
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">#</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Graph</th>
-                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Flips</th>
+                      <th className="sticky top-0 bg-zinc-50 px-2 py-2 font-medium">Errors</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Result</th>
                       <th className="sticky top-0 bg-zinc-50 px-2 py-2 text-right font-medium">Share</th>
                     </tr>
@@ -720,10 +720,8 @@ export default function LdpcGraph() {
                         <td className="px-2 py-1.5">
                           <span className="font-semibold text-zinc-600">{entry.graphName}</span>
                         </td>
-                        <td className="px-2 py-1.5">
-                          <span className={`font-semibold ${getFlipDifficulty(entry.prob0).color}`}>
-                            {getFlipDifficulty(entry.prob0).label}
-                          </span>
+                        <td className="px-2 py-1.5 tabular-nums text-zinc-600">
+                          {entry.numErrors}
                         </td>
                         <td className="px-2 py-1.5 text-right">
                           {entry.logicalError ? (

@@ -1,7 +1,7 @@
 {
   "id": "golay-23-12-7",
   "name": "Golay [23,12,7]",
-  "maxErrorProb": 0.2,
+  "maxErrors": 3,
   "checkNodes": [
     "check_0",
     "check_1",

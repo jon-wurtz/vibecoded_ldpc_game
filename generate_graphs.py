@@ -106,7 +106,7 @@ def make_repetition_code(n_data=7):
     return {
         "id": "repetition-code",
         "name": "Repetition Code",
-        "maxErrorProb": 0.4,
+        "maxErrors": 3,  # distance = n_data = 7, floor((7-1)/2)
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
         "edges": [[a, b] for a, b in edges],
@@ -167,7 +167,7 @@ def make_graph_code(n_vertices=10, connectivity=4, seed=42):
     return {
         "id": "graph-code",
         "name": "Graph Code",
-        "maxErrorProb": 0.4,
+        "maxErrors": 1,  # girth = 3, floor((3-1)/2)
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
         "edges": bipartite_edges,
@@ -202,7 +202,7 @@ def make_hamming_code():
     return {
         "id": "hamming-7-4-3",
         "name": "Hamming [7,4,3]",
-        "maxErrorProb": 0.3,
+        "maxErrors": 1,  # distance = 3, floor((3-1)/2)
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
         "edges": edges,
@@ -276,7 +276,7 @@ def make_golay_code():
     return {
         "id": "golay-23-12-7",
         "name": "Golay [23,12,7]",
-        "maxErrorProb": 0.2,
+        "maxErrors": 3,  # distance = 7, floor((7-1)/2)
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
         "edges": edges,

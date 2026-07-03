@@ -1,7 +1,7 @@
 {
   "id": "graph-code",
   "name": "Graph Code",
-  "maxErrorProb": 0.4,
+  "maxErrors": 1,
   "checkNodes": [
     "check_0",
     "check_1",

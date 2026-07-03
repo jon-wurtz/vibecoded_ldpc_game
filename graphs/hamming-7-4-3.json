@@ -1,7 +1,7 @@
 {
   "id": "hamming-7-4-3",
   "name": "Hamming [7,4,3]",
-  "maxErrorProb": 0.3,
+  "maxErrors": 1,
   "checkNodes": [
     "check_0",
     "check_1",

@@ -1,7 +1,7 @@
 {
   "id": "repetition-code",
   "name": "Repetition Code",
-  "maxErrorProb": 0.4,
+  "maxErrors": 3,
   "checkNodes": [
     "check_0",
     "check_1",
