@@ -20,6 +20,8 @@ export async function GET() {
       dataNodes: d.dataNodes as string[],
       edges: d.edges as [string, string][],
       positions: d.positions as Record<string, { x: number; y: number }>,
+      xCheckNodes: (d.xCheckNodes || []) as string[],
+      zCheckNodes: (d.zCheckNodes || []) as string[],
     };
   });
   list.sort((a, b) => a.logicalBits - b.logicalBits);

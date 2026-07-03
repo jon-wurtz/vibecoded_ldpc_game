@@ -16,6 +16,8 @@ interface GraphMeta {
   dataNodes: string[];
   edges: [string, string][];
   positions: Record<string, { x: number; y: number }>;
+  xCheckNodes?: string[];
+  zCheckNodes?: string[];
 }
 
 interface GraphData {
@@ -28,6 +30,12 @@ interface GraphData {
   positions: Record<string, { x: number; y: number }>;
   H: number[][];
   G: number[][];
+  xCheckNodes?: string[];
+  zCheckNodes?: string[];
+  Hx?: number[][];
+  Hz?: number[][];
+  Lx?: number[];
+  Lz?: number[];
 }
 
 interface HistoryEntry {
@@ -102,7 +110,8 @@ function computeColors(
 }
 
 // Encode which data nodes the player flipped as a hex bitmask
-function encodeFlips(nodeColors: Map<string, string>, dataNodes: string[]): string {
+function encodeFlips(nodeColors: Map<string, string>, dataNodes: string[], isQuantum = false): string {
+  if (isQuantum) return "";
   let bits = BigInt(0);
   for (let i = 0; i < dataNodes.length; i++) {
     if (nodeColors.get(dataNodes[i]) === DATA_COLOR) {
@@ -110,6 +119,100 @@ function encodeFlips(nodeColors: Map<string, string>, dataNodes: string[]): stri
     }
   }
   return bits.toString(16);
+}
+
+function computeQuantumColors(
+  g: Graph,
+  adj: Map<string, string[]>,
+  numErrors: number,
+  dataSeed: number,
+  xCheckSet: Set<string>,
+  zCheckSet: Set<string>
+): { colors: Map<string, string>; xErrorNodes: Set<string>; zErrorNodes: Set<string> } {
+  const zSeed = (dataSeed ^ 0xdeadbeef) >>> 0;
+  const xErrIndices = pickErrorSet(g, numErrors, dataSeed);
+  const zErrIndices = pickErrorSet(g, numErrors, zSeed);
+
+  const colors = new Map<string, string>();
+  const xErrorNodes = new Set<string>();
+  const zErrorNodes = new Set<string>();
+
+  // Data nodes start hidden (errors revealed only through syndrome, not color)
+  for (let i = 0; i < g.dataNodes.length; i++) {
+    const node = g.dataNodes[i];
+    colors.set(node, DATA_TOGGLED);
+    if (xErrIndices.has(i)) xErrorNodes.add(node);
+    if (zErrIndices.has(i)) zErrorNodes.add(node);
+  }
+
+  // X-checks detect Z errors: triggered when parity of adjacent Z-error qubits is odd
+  for (const node of xCheckSet) {
+    const parity = (adj.get(node) || []).reduce(
+      (sum, nb) => sum + (zErrorNodes.has(nb) ? 1 : 0), 0
+    ) % 2;
+    colors.set(node, parity === 0 ? X_CHECK_COLOR : X_CHECK_TRIGGERED);
+  }
+  // Z-checks detect X errors: triggered when parity of adjacent X-error qubits is odd
+  for (const node of zCheckSet) {
+    const parity = (adj.get(node) || []).reduce(
+      (sum, nb) => sum + (xErrorNodes.has(nb) ? 1 : 0), 0
+    ) % 2;
+    colors.set(node, parity === 0 ? Z_CHECK_COLOR : Z_CHECK_TRIGGERED);
+  }
+
+  return { colors, xErrorNodes, zErrorNodes };
+}
+
+function evalQuantumLogicalError(
+  g: Graph,
+  adj: Map<string, string[]>,
+  xCheckSet: Set<string>,
+  zCheckSet: Set<string>,
+  matLx: number[],
+  matLz: number[],
+  numErrors: number,
+  dataSeed: number,
+  xErrors: Set<string>,
+  zErrors: Set<string>
+): { isLogicalError: boolean; bitsFlipped: number } {
+  const zSeed = (dataSeed ^ 0xdeadbeef) >>> 0;
+  const hiddenXIndices = pickErrorSet(g, numErrors, dataSeed);
+  const hiddenZIndices = pickErrorSet(g, numErrors, zSeed);
+
+  const hiddenX = g.dataNodes.map((_, i) => (hiddenXIndices.has(i) ? 1 : 0));
+  const hiddenZ = g.dataNodes.map((_, i) => (hiddenZIndices.has(i) ? 1 : 0));
+  const userX   = g.dataNodes.map((n) => (xErrors.has(n) ? 1 : 0));
+  const userZ   = g.dataNodes.map((n) => (zErrors.has(n) ? 1 : 0));
+
+  const residualX = hiddenX.map((e, i) => e ^ userX[i]);
+  const residualZ = hiddenZ.map((e, i) => e ^ userZ[i]);
+
+  // Build lookup maps for residual errors by node name
+  const resXByNode = new Map(g.dataNodes.map((n, i) => [n, residualX[i]]));
+  const resZByNode = new Map(g.dataNodes.map((n, i) => [n, residualZ[i]]));
+
+  // All Z-checks must have even parity over residualX (Z-checks detect X errors)
+  let syndromeOk = true;
+  for (const node of zCheckSet) {
+    const parity = (adj.get(node) || []).reduce((s, nb) => s + (resXByNode.get(nb) || 0), 0) % 2;
+    if (parity !== 0) { syndromeOk = false; break; }
+  }
+  // All X-checks must have even parity over residualZ (X-checks detect Z errors)
+  if (syndromeOk) {
+    for (const node of xCheckSet) {
+      const parity = (adj.get(node) || []).reduce((s, nb) => s + (resZByNode.get(nb) || 0), 0) % 2;
+      if (parity !== 0) { syndromeOk = false; break; }
+    }
+  }
+
+  // Logical X error: Lz · residualX ≠ 0  (Lz detects X-type logical errors)
+  const logicalXErr = matLz.reduce((xor, bit, i) => xor ^ (bit & residualX[i]), 0) !== 0;
+  // Logical Z error: Lx · residualZ ≠ 0  (Lx detects Z-type logical errors)
+  const logicalZErr = matLx.reduce((xor, bit, i) => xor ^ (bit & residualZ[i]), 0) !== 0;
+
+  const bitsFlipped =
+    residualX.reduce((s, b) => s + b, 0) + residualZ.reduce((s, b) => s + b, 0);
+  return { isLogicalError: !syndromeOk || logicalXErr || logicalZErr, bitsFlipped };
 }
 
 // Apply encoded flips to an initial color state
@@ -156,6 +259,15 @@ const CHECK_TOGGLED = "#f97316";
 const DATA_COLOR = "#475569";
 const DATA_TOGGLED = "#e2e8f0";
 
+// Quantum-specific colors
+const X_CHECK_COLOR     = "#93c5fd";  // light blue  – X-check satisfied (detects Z errors)
+const X_CHECK_TRIGGERED = "#1e40af";  // deep blue   – X-check triggered
+const Z_CHECK_COLOR     = "#fca5a5";  // light red   – Z-check satisfied (detects X errors)
+const Z_CHECK_TRIGGERED = "#991b1b";  // deep red    – Z-check triggered
+const DATA_X_ERROR      = "#ef4444";  // red         – X error (bit flip)
+const DATA_Z_ERROR      = "#3b82f6";  // blue        – Z error (phase flip)
+const DATA_BOTH_ERROR   = "#22c55e";  // green       – both X and Z error
+
 export default function LdpcGraph() {
   const [graphList, setGraphList] = useState<GraphMeta[]>([]);
   const [selectedGraphId, setSelectedGraphId] = useState<string>("");
@@ -183,10 +295,64 @@ export default function LdpcGraph() {
   const numErrorsRef = useRef<number>(1);
   const assessmentModeRef = useRef<boolean>(false);
 
+  // Quantum-specific state
+  const [isQuantum, setIsQuantum] = useState(false);
+  const [quantumXSet, setQuantumXSet] = useState<Set<string>>(new Set());
+  const [quantumZSet, setQuantumZSet] = useState<Set<string>>(new Set());
+  const [matLx, setMatLx] = useState<number[]>([]);
+  const [matLz, setMatLz] = useState<number[]>([]);
+  const [hiddenQXErrors, setHiddenQXErrors] = useState<Set<string>>(new Set()); // secret X errors
+  const [hiddenQZErrors, setHiddenQZErrors] = useState<Set<string>>(new Set()); // secret Z errors
+  const [quantumXErrors, setQuantumXErrors] = useState<Set<string>>(new Set()); // user's X corrections
+  const [quantumZErrors, setQuantumZErrors] = useState<Set<string>>(new Set()); // user's Z corrections
+  const [hiddenZErrors, setHiddenZErrors] = useState<Set<string>>(new Set());
+  const isQuantumRef = useRef<boolean>(false);
+
   const adjacency = useMemo(() => {
     if (!graph) return new Map<string, string[]>();
     return buildAdj(graph);
   }, [graph]);
+
+  // Keep isQuantumRef in sync for stable callbacks
+  useEffect(() => { isQuantumRef.current = isQuantum; }, [isQuantum]);
+
+  // Derived color map for quantum codes (replaces nodeColors during rendering)
+  const quantumColors = useMemo((): Map<string, string> | null => {
+    if (!isQuantum || !graph) return null;
+    const colors = new Map<string, string>();
+
+    // Data nodes: show only the user's corrections (hidden errors are invisible)
+    for (const node of graph.dataNodes) {
+      const hasX = quantumXErrors.has(node);
+      const hasZ = quantumZErrors.has(node);
+      if (hasX && hasZ) colors.set(node, DATA_BOTH_ERROR);
+      else if (hasX) colors.set(node, DATA_X_ERROR);
+      else if (hasZ) colors.set(node, DATA_Z_ERROR);
+      else colors.set(node, DATA_TOGGLED);
+    }
+
+    // X-checks detect Z errors: syndrome = parity of (hiddenZ XOR userZ) among neighbors
+    for (const node of quantumXSet) {
+      const parity = (adjacency.get(node) || []).reduce(
+        (sum, nb) => {
+          const netZ = hiddenQZErrors.has(nb) !== quantumZErrors.has(nb);
+          return sum + (netZ ? 1 : 0);
+        }, 0) % 2;
+      colors.set(node, parity === 0 ? X_CHECK_COLOR : X_CHECK_TRIGGERED);
+    }
+
+    // Z-checks detect X errors: syndrome = parity of (hiddenX XOR userX) among neighbors
+    for (const node of quantumZSet) {
+      const parity = (adjacency.get(node) || []).reduce(
+        (sum, nb) => {
+          const netX = hiddenQXErrors.has(nb) !== quantumXErrors.has(nb);
+          return sum + (netX ? 1 : 0);
+        }, 0) % 2;
+      colors.set(node, parity === 0 ? Z_CHECK_COLOR : Z_CHECK_TRIGGERED);
+    }
+
+    return colors;
+  }, [isQuantum, graph, hiddenQXErrors, hiddenQZErrors, quantumXErrors, quantumZErrors, quantumXSet, quantumZSet, adjacency]);
 
   const loadGraphById = useCallback(
     async (graphId: string, ne: number, ds: number) => {
@@ -204,7 +370,40 @@ export default function LdpcGraph() {
       };
       const clampedNe = Math.min(Math.max(ne, 1), gd.maxErrors);
       const adj = buildAdj(g);
-      const colors = computeColors(g, adj, clampedNe, ds);
+      const isQ = !!(gd.xCheckNodes?.length);
+      isQuantumRef.current = isQ;
+
+      let colors: Map<string, string>;
+      let initQXErrors = new Set<string>();
+      let initQZErrors = new Set<string>();
+      if (isQ) {
+        const xSet = new Set(gd.xCheckNodes!);
+        const zSet = new Set(gd.zCheckNodes!);
+        const result = computeQuantumColors(g, adj, clampedNe, ds, xSet, zSet);
+        colors = result.colors;
+        initQXErrors = result.xErrorNodes;
+        initQZErrors = result.zErrorNodes;
+        setQuantumXSet(xSet);
+        setQuantumZSet(zSet);
+        setMatLx(gd.Lx || []);
+        setMatLz(gd.Lz || []);
+        setHiddenQXErrors(initQXErrors);
+        setHiddenQZErrors(initQZErrors);
+        setQuantumXErrors(new Set());
+        setQuantumZErrors(new Set());
+        setHiddenZErrors(new Set());
+      } else {
+        colors = computeColors(g, adj, clampedNe, ds);
+        setQuantumXSet(new Set());
+        setQuantumZSet(new Set());
+        setMatLx([]);
+        setMatLz([]);
+        setQuantumXErrors(new Set());
+        setQuantumZErrors(new Set());
+        setHiddenZErrors(new Set());
+      }
+
+      setIsQuantum(isQ);
       setSelectedGraphId(graphId);
       setSelectedGraphName(gd.name);
       setMaxErrors(gd.maxErrors);
@@ -287,14 +486,35 @@ export default function LdpcGraph() {
     const ne = numErrorsRef.current;
     const ds = newSeed();
     const adj = buildAdj(g);
-    const colors = computeColors(g, adj, ne, ds);
     assessmentModeRef.current = false;
     setNumErrors(ne); setDataSeed(ds);
-    setNodeColors(colors); setInitialColors(colors);
     setAssessmentMode(false); setHiddenErrorNodes(new Set());
+    setHiddenZErrors(new Set());
     setChallenge(null); setShowingChallenger(false);
     lastChallengeTimeRef.current = Date.now();
     advanceTimerRef.current = null;
+    if (isQuantumRef.current) {
+      // quantumColors memo will recompute from error sets; reset errors to new hidden ones
+      // We store the initial hidden errors in quantumXErrors/quantumZErrors for the memo
+      const xSet = new Set<string>();
+      const zSet = new Set<string>();
+      // Collect x/z check sets from current graph
+      for (const n of g.checkNodes) {
+        if (n.startsWith("xcheck_")) xSet.add(n);
+        else if (n.startsWith("zcheck_")) zSet.add(n);
+      }
+      const result = computeQuantumColors(g, adj, ne, ds, xSet, zSet);
+      setNodeColors(result.colors); setInitialColors(result.colors);
+      setHiddenQXErrors(result.xErrorNodes);
+      setHiddenQZErrors(result.zErrorNodes);
+      setQuantumXErrors(new Set());
+      setQuantumZErrors(new Set());
+    } else {
+      const colors = computeColors(g, adj, ne, ds);
+      setNodeColors(colors); setInitialColors(colors);
+      setQuantumXErrors(new Set());
+      setQuantumZErrors(new Set());
+    }
   }, []);
 
   const handleRandomize = useCallback(() => {
@@ -305,38 +525,59 @@ export default function LdpcGraph() {
     }
     const ds = newSeed();
     const adj = buildAdj(graph);
-    const colors = computeColors(graph, adj, numErrors, ds);
     assessmentModeRef.current = false;
     setDataSeed(ds);
-    setNodeColors(colors);
-    setInitialColors(colors);
     setAssessmentMode(false);
     setHiddenErrorNodes(new Set());
+    setHiddenZErrors(new Set());
     setChallenge(null);
     setShowingChallenger(false);
     lastChallengeTimeRef.current = Date.now();
-  }, [graph, numErrors]);
+    if (isQuantum) {
+      const result = computeQuantumColors(graph, adj, numErrors, ds, quantumXSet, quantumZSet);
+      setNodeColors(result.colors);
+      setInitialColors(result.colors);
+      setHiddenQXErrors(result.xErrorNodes);
+      setHiddenQZErrors(result.zErrorNodes);
+      setQuantumXErrors(new Set());
+      setQuantumZErrors(new Set());
+    } else {
+      const colors = computeColors(graph, adj, numErrors, ds);
+      setNodeColors(colors);
+      setInitialColors(colors);
+    }
+  }, [graph, numErrors, isQuantum, quantumXSet, quantumZSet]);
 
   const handleSubmit = useCallback(() => {
     if (!graph || assessmentModeRef.current) return;
     assessmentModeRef.current = true;
-    const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
-    const errorSet = pickErrorSet(graph, numErrors, dataSeed);
-    const errorNodes = new Set<string>(graph.dataNodes.filter((_, i) => errorSet.has(i)));
-    const flips = encodeFlips(nodeColors, graph.dataNodes);
+    const { isLogicalError, bitsFlipped } = isQuantum
+      ? evalQuantumLogicalError(graph, adjacency, quantumXSet, quantumZSet, matLx, matLz, numErrors, dataSeed, quantumXErrors, quantumZErrors)
+      : evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
+    if (isQuantum) {
+      const zSeed = (dataSeed ^ 0xdeadbeef) >>> 0;
+      const xHidden = pickErrorSet(graph, numErrors, dataSeed);
+      const zHidden = pickErrorSet(graph, numErrors, zSeed);
+      setHiddenErrorNodes(new Set(graph.dataNodes.filter((_, i) => xHidden.has(i))));
+      setHiddenZErrors(new Set(graph.dataNodes.filter((_, i) => zHidden.has(i))));
+    } else {
+      const errorSet = pickErrorSet(graph, numErrors, dataSeed);
+      setHiddenErrorNodes(new Set(graph.dataNodes.filter((_, i) => errorSet.has(i))));
+      setHiddenZErrors(new Set());
+    }
+    const flips = encodeFlips(nodeColors, graph.dataNodes, isQuantum);
     setHistory((prev) => [
       ...prev,
       { graphId: selectedGraphId, graphName: selectedGraphName, numErrors, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
     ]);
     setAssessmentMode(true);
     setAssessmentSuccess(!isLogicalError);
-    setHiddenErrorNodes(errorNodes);
     setAssessmentMessage(isLogicalError ? `Logical Error (${bitsFlipped} bit${bitsFlipped !== 1 ? "s" : ""})` : "Success!");
     if (!isLogicalError) {
       const elapsed = Date.now() - lastChallengeTimeRef.current;
-      advanceTimerRef.current = setTimeout(doAdvance, Math.max(250, 2000 - elapsed));
+      advanceTimerRef.current = setTimeout(doAdvance, Math.max(500, 2000 - elapsed));
     }
-  }, [graph, assessmentMode, matG, numErrors, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
+  }, [graph, adjacency, matG, matLx, matLz, numErrors, dataSeed, nodeColors, isQuantum, quantumXErrors, quantumZErrors, quantumXSet, quantumZSet, selectedGraphId, selectedGraphName, doAdvance]);
 
   const handleEnter = useCallback(() => {
     if (!graph || !selectedGraphId) return;
@@ -344,22 +585,32 @@ export default function LdpcGraph() {
     if (!assessmentModeRef.current) {
       assessmentModeRef.current = true;
       // Phase 1: evaluate and enter assessment mode
-      const { isLogicalError, bitsFlipped } = evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
-      const errorSet = pickErrorSet(graph, numErrors, dataSeed);
-      const errorNodes = new Set<string>(graph.dataNodes.filter((_, i) => errorSet.has(i)));
-      const flips = encodeFlips(nodeColors, graph.dataNodes);
+      const { isLogicalError, bitsFlipped } = isQuantum
+        ? evalQuantumLogicalError(graph, adjacency, quantumXSet, quantumZSet, matLx, matLz, numErrors, dataSeed, quantumXErrors, quantumZErrors)
+        : evalLogicalError(graph, matG, numErrors, dataSeed, nodeColors);
+      if (isQuantum) {
+        const zSeed = (dataSeed ^ 0xdeadbeef) >>> 0;
+        const xHidden = pickErrorSet(graph, numErrors, dataSeed);
+        const zHidden = pickErrorSet(graph, numErrors, zSeed);
+        setHiddenErrorNodes(new Set(graph.dataNodes.filter((_, i) => xHidden.has(i))));
+        setHiddenZErrors(new Set(graph.dataNodes.filter((_, i) => zHidden.has(i))));
+      } else {
+        const errorSet = pickErrorSet(graph, numErrors, dataSeed);
+        setHiddenErrorNodes(new Set(graph.dataNodes.filter((_, i) => errorSet.has(i))));
+        setHiddenZErrors(new Set());
+      }
+      const flips = encodeFlips(nodeColors, graph.dataNodes, isQuantum);
       setHistory((prev) => [
         ...prev,
         { graphId: selectedGraphId, graphName: selectedGraphName, numErrors, logicalError: isLogicalError, bitsFlipped, dataSeed, flips },
       ]);
       setAssessmentMode(true);
       setAssessmentSuccess(!isLogicalError);
-      setHiddenErrorNodes(errorNodes);
       setAssessmentMessage(isLogicalError ? `Logical Error (${bitsFlipped} bit${bitsFlipped !== 1 ? "s" : ""})` : "Success!");
       if (!isLogicalError) {
         // Auto-advance after 0.25s (but no sooner than 2s after last challenge started)
         const elapsed = Date.now() - lastChallengeTimeRef.current;
-        advanceTimerRef.current = setTimeout(doAdvance, Math.max(250, 2000 - elapsed));
+        advanceTimerRef.current = setTimeout(doAdvance, Math.max(500, 2000 - elapsed));
       }
     } else {
       // Phase 2: advance to next challenge (respecting 2s cooldown from last challenge start)
@@ -374,12 +625,21 @@ export default function LdpcGraph() {
         doAdvance();
       }
     }
-  }, [graph, assessmentMode, matG, numErrors, dataSeed, nodeColors, selectedGraphId, selectedGraphName, doAdvance]);
+  }, [graph, adjacency, matG, matLx, matLz, numErrors, dataSeed, nodeColors, isQuantum, quantumXErrors, quantumZErrors, quantumXSet, quantumZSet, selectedGraphId, selectedGraphName, doAdvance]);
 
   const handleNodeClick = useCallback(
     (node: string) => {
       if (assessmentMode || showingChallenger) return;
       if (!node.startsWith("data_")) return;
+      if (isQuantum) {
+        // Left click = X error (bit flip); quantumColors memo recomputes check states
+        setQuantumXErrors((prev) => {
+          const next = new Set(prev);
+          if (next.has(node)) next.delete(node); else next.add(node);
+          return next;
+        });
+        return;
+      }
       setNodeColors((prev) => {
         const next = new Map(prev);
         const currentData = next.get(node);
@@ -392,7 +652,21 @@ export default function LdpcGraph() {
         return next;
       });
     },
-    [adjacency, assessmentMode, showingChallenger]
+    [adjacency, assessmentMode, showingChallenger, isQuantum]
+  );
+
+  const handleNodeRightClick = useCallback(
+    (node: string) => {
+      if (!isQuantum || assessmentMode || showingChallenger) return;
+      if (!node.startsWith("data_")) return;
+      // Right click = Z error (phase flip); quantumColors memo recomputes check states
+      setQuantumZErrors((prev) => {
+        const next = new Set(prev);
+        if (next.has(node)) next.delete(node); else next.add(node);
+        return next;
+      });
+    },
+    [isQuantum, assessmentMode, showingChallenger]
   );
 
   const toggleChallengerView = useCallback(() => {
@@ -509,13 +783,16 @@ export default function LdpcGraph() {
                     const pos = gm.positions[node];
                     if (!pos) return null;
                     const isCheck = checkSet.has(node);
+                    const thumbCheckColor = node.startsWith("xcheck_") ? X_CHECK_COLOR
+                      : node.startsWith("zcheck_") ? Z_CHECK_COLOR
+                      : CHECK_COLOR;
                     return (
                       <circle
                         key={node}
                         cx={pos.x}
                         cy={pos.y}
                         r={isCheck ? 22 : 28}
-                        fill={isCheck ? CHECK_COLOR : DATA_TOGGLED}
+                        fill={isCheck ? thumbCheckColor : DATA_TOGGLED}
                         opacity={isSelected ? 1 : 0.8}
                       />
                     );
@@ -593,21 +870,50 @@ export default function LdpcGraph() {
 
         {/* Legend + Score */}
         {graph && (
-          <div className="flex items-center gap-6 text-xs text-zinc-500">
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#670EFF] shadow-[0_0_6px_#670EFF]" />
-              <span className="text-zinc-400">Check</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#475569]" />
-              <span className="text-zinc-400">Data</span>
-            </span>
+          <div className="flex items-center gap-4 text-xs text-zinc-500 flex-wrap">
+            {isQuantum ? (
+              <>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-sm bg-[#93c5fd]" />
+                  <span className="text-zinc-400">X-check</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-sm bg-[#fca5a5]" />
+                  <span className="text-zinc-400">Z-check</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#ef4444]" />
+                  <span className="text-zinc-400">X err (left click)</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#3b82f6]" />
+                  <span className="text-zinc-400">Z err (right click)</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#22c55e]" />
+                  <span className="text-zinc-400">Both</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#670EFF] shadow-[0_0_6px_#670EFF]" />
+                  <span className="text-zinc-400">Check</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#475569]" />
+                  <span className="text-zinc-400">Data</span>
+                </span>
+              </>
+            )}
             <span className="text-zinc-600">
               {assessmentMode
                 ? (assessmentSuccess ? "Correct! Next challenge loading…" : "Press Enter for next challenge")
                 : showingChallenger
                   ? "Viewing challenger's solution"
-                  : "Click a data node to toggle parity"}
+                  : isQuantum
+                    ? "Left-click = X error, right-click = Z error"
+                    : "Click a data node to toggle parity"}
             </span>
             <span className="ml-auto flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1">
               <span className="text-zinc-500 uppercase tracking-wide">Logical Errors</span>
@@ -665,11 +971,17 @@ export default function LdpcGraph() {
                 const pa = positions[a];
                 const pb = positions[b];
                 if (!pa || !pb) return null;
-                const colA = (assessmentMode && !a.startsWith("data_") ? initialColors : nodeColors).get(a);
-                const colB = (assessmentMode && !b.startsWith("data_") ? initialColors : nodeColors).get(b);
-                const aOrange = colA === CHECK_TOGGLED;
-                const bOrange = colB === CHECK_TOGGLED;
-                const highlighted = aOrange || bOrange;
+                const renderColors = isQuantum ? (quantumColors ?? new Map()) : nodeColors;
+                const colA = (assessmentMode && !a.startsWith("data_") ? initialColors : renderColors).get(a);
+                const colB = (assessmentMode && !b.startsWith("data_") ? initialColors : renderColors).get(b);
+                const aXTrig = colA === X_CHECK_TRIGGERED, bXTrig = colB === X_CHECK_TRIGGERED;
+                const aZTrig = colA === Z_CHECK_TRIGGERED, bZTrig = colB === Z_CHECK_TRIGGERED;
+                const aOrange = colA === CHECK_TOGGLED, bOrange = colB === CHECK_TOGGLED;
+                const edgeColor = (aXTrig || bXTrig) ? X_CHECK_TRIGGERED
+                  : (aZTrig || bZTrig) ? Z_CHECK_TRIGGERED
+                  : (aOrange || bOrange) ? "#f97316"
+                  : "#374151";
+                const highlighted = aXTrig || bXTrig || aZTrig || bZTrig || aOrange || bOrange;
                 return (
                   <line
                     key={i}
@@ -677,7 +989,7 @@ export default function LdpcGraph() {
                     y1={pa.y}
                     x2={pb.x}
                     y2={pb.y}
-                    stroke={highlighted ? "#f97316" : "#374151"}
+                    stroke={edgeColor}
                     strokeWidth={highlighted ? 2.5 : 1}
                     opacity={highlighted ? 0.8 : 0.5}
                   />
@@ -689,13 +1001,15 @@ export default function LdpcGraph() {
                 const pos = positions[node];
                 if (!pos) return null;
                 const isData = node.startsWith("data_");
-                const colorMap = assessmentMode && !isData ? initialColors : nodeColors;
-                const color = colorMap.get(node) || (isData ? DATA_COLOR : CHECK_COLOR);
-                const isOrange = color === CHECK_TOGGLED;
+                const renderColors = isQuantum ? (quantumColors ?? new Map()) : nodeColors;
+                const colorMap = assessmentMode && !isData ? initialColors : renderColors;
+                const defaultColor = isData ? DATA_COLOR : (node.startsWith("xcheck_") ? X_CHECK_COLOR : node.startsWith("zcheck_") ? Z_CHECK_COLOR : CHECK_COLOR);
+                const color = colorMap.get(node) || defaultColor;
+                const isTriggered = color === CHECK_TOGGLED || color === X_CHECK_TRIGGERED || color === Z_CHECK_TRIGGERED;
                 const radius = isData ? 14 : 11;
 
                 let filter: string | undefined;
-                if (isOrange) filter = "url(#glow-orange)";
+                if (isTriggered) filter = "url(#glow-orange)";
                 else if (!isData) filter = "url(#glow-check)";
                 else if (color === DATA_TOGGLED) filter = "url(#glow-data)";
 
@@ -717,13 +1031,15 @@ export default function LdpcGraph() {
                       opacity: assessmentMode ? 0.85 : 1,
                     }}
                     onClick={() => handleNodeClick(node)}
+                    onMouseDown={(e) => { if (e.button === 2) { e.preventDefault(); handleNodeRightClick(node); } }}
+                    onContextMenu={(e) => e.preventDefault()}
                   >
                     <title>{node}</title>
                   </circle>
                 );
               })}
 
-              {/* Assessment: red rings on hidden error nodes */}
+              {/* Assessment: red rings on hidden X-error nodes */}
               {assessmentMode && [...hiddenErrorNodes].map((node) => {
                 const pos = positions[node];
                 if (!pos) return null;
@@ -735,6 +1051,23 @@ export default function LdpcGraph() {
                     r={21}
                     fill="none"
                     stroke="#ef4444"
+                    strokeWidth={3}
+                    opacity={0.9}
+                  />
+                );
+              })}
+              {/* Assessment: blue rings on hidden Z-error nodes */}
+              {assessmentMode && [...hiddenZErrors].map((node) => {
+                const pos = positions[node];
+                if (!pos) return null;
+                return (
+                  <circle
+                    key={`zerr-${node}`}
+                    cx={pos.x}
+                    cy={pos.y}
+                    r={25}
+                    fill="none"
+                    stroke="#3b82f6"
                     strokeWidth={3}
                     opacity={0.9}
                   />

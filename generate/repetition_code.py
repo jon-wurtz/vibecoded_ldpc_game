@@ -33,6 +33,9 @@ def make_repetition_code(n_data=7):
     # G: generator/decoding matrix — all-ones (1 logical bit)
     G_mat = [[1] * n_data]
 
+    pos = normalize_positions(pos)#{key:(x[0]*100+500, x[1]*100) for key,x in pos.items()}  # scale and shift positions for better visualization
+    pos = {key: {"x": x["x"], "y": x["y"]*0.1+500} for key, x in pos.items()}  # scale y positions for better visualization
+    
     return {
         "id": "repetition-code",
         "name": "[7,1,7] Repetition Code",
@@ -40,7 +43,7 @@ def make_repetition_code(n_data=7):
         "checkNodes": check_nodes,
         "dataNodes": data_nodes,
         "edges": [[a, b] for a, b in edges],
-        "positions": normalize_positions(pos),
+        "positions": pos,#normalize_positions(pos),
         "H": H,
         "G": G_mat,
     }

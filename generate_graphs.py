@@ -8,6 +8,7 @@ from generate.levi_cage import make_levi_cage
 from generate.mcgee_graph import make_mcgee_graph
 from generate.reed_muller_code import make_reed_muller_32_6_16
 from generate.repetition_code import make_repetition_code
+from generate.surface_code import make_surface_code_d7
 
 GRAPHS_DIR = os.path.join(os.path.dirname(__file__), "graphs")
 os.makedirs(GRAPHS_DIR, exist_ok=True)
@@ -21,6 +22,7 @@ if __name__ == "__main__":
         make_mcgee_graph(),
         make_reed_muller_32_6_16(),
         # make_bch_31_16_7(),
+        make_surface_code_d7(),
     ]
     for g in graphs:
         path = os.path.join(GRAPHS_DIR, f"{g['id']}.json")
