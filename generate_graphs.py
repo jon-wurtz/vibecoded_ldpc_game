@@ -286,12 +286,84 @@ def make_golay_code():
     }
 
 
+def make_levi_cage():
+    """(3,8)-cage: the unique 30-vertex 3-regular graph of girth 8.
+    Also called the Tutte-Coxeter graph / Levi graph of GQ(2,2).
+    Tanner graph: 15 data nodes and 15 check nodes, each of weight 3.
+    """
+    # Construct via LCF notation [-13,-9,7,-7,9,13]^5 on 30 vertices
+    n = 30
+    lcf = [-13, -9, 7, -7, 9, 13]
+    raw = nx.Graph()
+    raw.add_nodes_from(range(n))
+    for i in range(n):
+        raw.add_edge(i, (i + 1) % n)
+    for i in range(n):
+        raw.add_edge(i, (i + lcf[i % len(lcf)]) % n)
+
+    G_seed = raw
+    n_vertices = G_seed.number_of_nodes()
+
+    # Copied from make_graph_code, but with fixed graph and girth 8
+    edges_list = sorted(G_seed.edges())
+    n_e = len(edges_list)
+    n_v = n_vertices
+    edge_to_idx = {e: i for i, e in enumerate(edges_list)}
+
+    data_nodes = [f"data_{i}" for i in range(n_e)]
+    check_nodes = [f"check_{v}" for v in range(n_v)]
+
+    # Bipartite graph for rendering: data_i ↔ check_u, check_v
+    B = nx.Graph()
+    bipartite_edges = []
+    for i, (u, v) in enumerate(edges_list):
+        d, cu, cv = f"data_{i}", f"check_{u}", f"check_{v}"
+        B.add_edge(d, cu)
+        B.add_edge(d, cv)
+        bipartite_edges.append([d, cu])
+        bipartite_edges.append([d, cv])
+
+    # H: vertex × edge incidence matrix
+    H = [[0] * n_e for _ in range(n_v)]
+    for v in range(n_v):
+        for u in G_seed.neighbors(v):
+            e = (min(v, u), max(v, u))
+            H[v][edge_to_idx[e]] = 1
+
+    # G: minimum cycle basis expressed as edge indicator vectors
+    cycles = nx.minimum_cycle_basis(G_seed)
+    G_mat = []
+    for cycle in cycles:
+        row = [0] * n_e
+        for j in range(len(cycle)):
+            a, b = cycle[j], cycle[(j + 1) % len(cycle)]
+            e = (min(a, b), max(a, b))
+            row[edge_to_idx[e]] = 1
+        G_mat.append(row)
+
+    pos_raw = nx.kamada_kawai_layout(B)
+    pos = {node: (float(pos_raw[node][0]), float(pos_raw[node][1])) for node in B.nodes()}
+
+    return {
+        "id": "levi-cage",
+        "name": "[30,15,3] Levi Cage graph code",
+        "maxErrors": 4,
+        "checkNodes": check_nodes,
+        "dataNodes": data_nodes,
+        "edges": bipartite_edges,
+        "positions": normalize_positions(pos),
+        "H": H,
+        "G": G_mat,
+    }
+    
+
 if __name__ == "__main__":
     graphs = [
         make_repetition_code(n_data=7),
         make_hamming_code(),
         make_golay_code(),
         make_graph_code(n_vertices=10, connectivity=4),
+        make_levi_cage(),
     ]
     for g in graphs:
         path = os.path.join(GRAPHS_DIR, f"{g['id']}.json")
