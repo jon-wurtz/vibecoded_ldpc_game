@@ -341,8 +341,18 @@ def make_levi_cage():
             row[edge_to_idx[e]] = 1
         G_mat.append(row)
 
-    pos_raw = nx.kamada_kawai_layout(B)
-    pos = {node: (float(pos_raw[node][0]), float(pos_raw[node][1])) for node in B.nodes()}
+    # Check nodes = cage vertices, placed uniformly on a circle in LCF vertex order.
+    # Data nodes = cage edges, placed at the midpoint of their two endpoint vertices
+    # and scaled inward so they form distinct inner rings by edge length.
+    R = 1.0
+    pos = {}
+    for v in range(n_v):
+        a = 2 * math.pi * v / n_v - math.pi / 2
+        pos[f"check_{v}"] = (R * math.cos(a), R * math.sin(a))
+    for i, (u, v) in enumerate(edges_list):
+        cu, cv = pos[f"check_{u}"], pos[f"check_{v}"]
+        mx, my = (cu[0] + cv[0]) / 2, (cu[1] + cv[1]) / 2
+        pos[f"data_{i}"] = (0.75 * mx, 0.75 * my)
 
     return {
         "id": "levi-cage",

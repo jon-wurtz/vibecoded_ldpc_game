@@ -80,7 +80,7 @@ function computeColors(
   const errorSet = pickErrorSet(g, numErrors, dataSeed);
   const dataState = new Map<string, number>();
   for (let i = 0; i < g.dataNodes.length; i++) {
-    dataState.set(g.dataNodes[i], errorSet.has(i) ? 0 : 1);
+    dataState.set(g.dataNodes[i], errorSet.has(i) ? 1 : 0);
   }
 
   const colors = new Map<string, string>();
