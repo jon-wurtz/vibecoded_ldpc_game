@@ -1,11 +1,24 @@
 ## Front matter
 
-This is a vibe-coded webapp using Claude produced in ~3 hours. The initial app was seeded by a hand-written python file (`make_ldpc_code.py`) and then converted. The intent is to make a puzzle game where the user tries to identify the errors on a classical ldpc code by minimizing the number of parity check errors.
+This is a vibe-coded webapp made by Claude and @jon-wurtz. The idea is to make a game in which the player is a decoder. The user is given a Tanner graph of parity check nodes (gray) and data nodes (purple). A hidden error is generated, triggering some of the parity check nodes (orange). The goal of the user is to identify the errors that occured by clicking on the data nodes to remove the parity checks.
 
-Disclaimer: everything is vibe coded and thus possibly slop. The graph generation is just an Edros-Renyi random Tanner graph with no guarantees of code distance or encoding rate, and the hidden noise is produced purely randomly with no notion of any code distance. Generally decoding these graphs is really hard, which can be frustrating. A future To Do is to make more structured ldpc instances (think something like a {classical} surface code or algebraic constructions) that have some notion of an actual code distance and decoding hardness.
+There are a selection of several graphs:
+- Hamming [7,4,3]: the "smallest perfect code" able to decode one error
+- Reed-Muller [32,6,16]: more or less impossible to decode via the Tanner graph due to it not being very low density, but serves as a useful example for a working code. It has a very high distance and decent rate, and has been used on deep space probes!
+- Repetition [7,1,7]: First academic excercise to explain decoding. Notibly, the decoding is /not/ majority vote!
+- McGee graph [24,13,7]: A graph code (each error fires exactly two syndromes) based on the (3,7) cage graph. Useful because its rather large but still decodable by hand with a large distance. To Do to make another larger graph code with higher distance to make decoding more interesting.
+- Surface code [[49,1,7]]: The canonical quantum code, with both X and Z errors (and, likewise, X and Z parity checks). Still a little bit buggy-- I'm a bit suspicious about the validation of logical errors.
+
+### To Dos:
+- Write some tutorial text that points out what a Tanner graph, decoder, error correction, etc. is
+- Find another relatively easy large code that is close to matching but not exactly (so hard to decode) while remaining quasi-local
+- Add small quantum codes, such as BB codes.
+
+### WARNING:
+Most of this is vibe coded, with some hand-coding for graphs. The surface code (and general quantum codes) are still a little buggy and need some care to fix.
 
 
-## AI boilerplate:
+# AI boilerplate:
 
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
